@@ -931,12 +931,35 @@ def applied_migrations(db_path: Path) -> list[str]:
     return [r[0] for r in rows]
 
 
+def _split_statements(sql: str) -> list[str]:
+    """Split a SQL script into complete statements using sqlite3's parser.
+
+    Walks the buffer with `sqlite3.complete_statement()` so triggers,
+    multi-line expressions, and `;` inside string literals are handled
+    correctly (string-split on `;` would mis-handle these)."""
+    statements: list[str] = []
+    buf = ""
+    for line in sql.splitlines(keepends=True):
+        buf += line
+        if sqlite3.complete_statement(buf):
+            stripped = buf.strip()
+            if stripped and not stripped.startswith("--"):
+                statements.append(stripped)
+            buf = ""
+    tail = buf.strip()
+    if tail and not tail.startswith("--"):
+        statements.append(tail)
+    return statements
+
+
 def apply_migrations(db_path: Path, migrations_dir: Path) -> list[str]:
     """Apply every `*.sql` file in `migrations_dir` (sorted) not yet applied.
 
-    Returns the list of migration names applied during this call (empty if
-    already up-to-date). Each migration runs in its own transaction; on
-    failure the transaction rolls back and the exception propagates.
+    Each migration runs as a SINGLE real transaction. We CANNOT use
+    `executescript()` here because it issues an implicit COMMIT before
+    running the script, defeating any wrapping BEGIN/ROLLBACK. Instead
+    we parse the file via `sqlite3.complete_statement()` and execute
+    statements one-by-one inside a real txn.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     files = sorted(p for p in migrations_dir.iterdir()
@@ -944,6 +967,8 @@ def apply_migrations(db_path: Path, migrations_dir: Path) -> list[str]:
     newly_applied: list[str] = []
 
     with sqlite3.connect(db_path) as conn:
+        # Bootstrap is a single idempotent CREATE TABLE IF NOT EXISTS;
+        # `executescript`'s implicit COMMIT is harmless here.
         conn.executescript(_BOOTSTRAP_SQL)
         already = {r[0] for r in conn.execute(
             "SELECT name FROM _schema_migrations").fetchall()}
@@ -951,10 +976,12 @@ def apply_migrations(db_path: Path, migrations_dir: Path) -> list[str]:
         for f in files:
             if f.name in already:
                 continue
-            sql = f.read_text()
+            sql = f.read_text(encoding="utf-8")
+            statements = _split_statements(sql)
             try:
                 conn.execute("BEGIN")
-                conn.executescript(sql)
+                for stmt in statements:
+                    conn.execute(stmt)
                 conn.execute(
                     "INSERT INTO _schema_migrations (name, applied_at) "
                     "VALUES (?, ?)",
@@ -962,7 +989,10 @@ def apply_migrations(db_path: Path, migrations_dir: Path) -> list[str]:
                 )
                 conn.execute("COMMIT")
             except Exception:
-                conn.execute("ROLLBACK")
+                try:
+                    conn.execute("ROLLBACK")
+                except sqlite3.OperationalError:
+                    pass  # already auto-rolled-back; preserve original exc
                 raise
             newly_applied.append(f.name)
 
