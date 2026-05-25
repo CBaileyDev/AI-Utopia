@@ -1,0 +1,30 @@
+# Brainstorming scratch (companion screens, session state)
+.superpowers/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Future implementation artifacts (not yet present; pre-claimed)
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+node_modules/
+target/
+build/
+dist/
+*.egg-info/
+
+# Runtime data (will live under var/lib/aiutopia in production)
+var/
+runs/
+*.ckpt
+*.pt
