@@ -44,9 +44,17 @@ def _split_statements(sql: str) -> list[str]:
         # complete_statement check; sqlite3 wants a terminated statement
         # ending in ';' on a non-comment line.
         if sqlite3.complete_statement(buf):
-            stripped = buf.strip()
-            if stripped and not stripped.startswith("--"):
-                statements.append(stripped)
+            # Strip leading comment-only / blank lines from the buffer so
+            # that a header comment immediately preceding a statement (very
+            # common in migration files) doesn't cause the whole statement
+            # to be discarded by the `startswith("--")` check below.
+            lines = buf.splitlines(keepends=True)
+            while lines and (not lines[0].strip()
+                             or lines[0].lstrip().startswith("--")):
+                lines.pop(0)
+            stmt = "".join(lines).strip()
+            if stmt:
+                statements.append(stmt)
             buf = ""
     tail = buf.strip()
     if tail and not tail.startswith("--"):

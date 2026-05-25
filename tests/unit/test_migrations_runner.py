@@ -83,6 +83,28 @@ def test_apply_migrations_rolls_back_partial_failure(tmp_path: Path) -> None:
         assert applied == []
 
 
+def test_apply_migrations_handles_comment_before_statement(tmp_path: Path) -> None:
+    """A header comment immediately preceding a statement must NOT cause the
+    statement to be silently discarded. Regression test: before the splitter
+    was fixed, the comment lines accumulated into the buffer and the
+    `startswith("--")` filter swallowed the whole CREATE TABLE."""
+    mig_dir = tmp_path / "migrations"
+    mig_dir.mkdir()
+    (mig_dir / "001_with_comments.sql").write_text(
+        "-- Header comment line 1.\n"
+        "-- Header comment line 2.\n"
+        "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);\n"
+        "\n"
+        "-- Seed comment.\n"
+        "INSERT INTO t (name) VALUES ('seeded');\n"
+    )
+    db = tmp_path / "test.db"
+    apply_migrations(db, mig_dir)
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute("SELECT name FROM t").fetchall()
+    assert rows == [("seeded",)]
+
+
 def test_apply_migrations_reads_utf8_explicitly(tmp_path: Path) -> None:
     """Migration files are read with explicit utf-8 encoding regardless of
     platform locale, so non-ASCII comments / identifiers don't mis-decode
