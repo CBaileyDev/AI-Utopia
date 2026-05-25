@@ -1,0 +1,26 @@
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[lint]
+select = [
+  "E", "F", "W",         # pycodestyle / pyflakes
+  "I",                    # isort
+  "B",                    # bugbear
+  "UP",                   # pyupgrade
+  "SIM",                  # simplify
+  "RUF",                  # ruff-specific
+  "TID",                  # tidy imports
+  "PL",                   # pylint subset
+]
+ignore = [
+  "PLR0913",              # too many args (Pydantic models trip this)
+  "PLR2004",              # magic value comparisons
+]
+
+[lint.per-file-ignores]
+"tests/**/*.py" = ["PLR2004", "B018"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
