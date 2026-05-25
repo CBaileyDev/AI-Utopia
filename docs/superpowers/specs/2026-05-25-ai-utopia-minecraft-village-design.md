@@ -1310,8 +1310,14 @@ class TargetState(BaseModel):
 
     @model_validator(mode="after")
     def _at_least_one(self):
-        if not any([self.inventory_delta, self.spatial_target,
-                    self.blueprint_target, self.threat_neutralized]):
+        # Distinguish "not set" (None / empty) from "set to False" — a
+        # defender goal `threat_neutralized=False` ("ensure threat is NOT
+        # in the neutralized state yet") is valid. Truthiness alone treats
+        # False as falsy and silently rejects it.
+        if (not self.inventory_delta
+            and self.spatial_target is None
+            and self.blueprint_target is None
+            and self.threat_neutralized is None):
             raise ValueError("TargetState requires at least one target field")
         return self
 

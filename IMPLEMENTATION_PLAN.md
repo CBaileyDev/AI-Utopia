@@ -148,8 +148,7 @@
 │   │   │   ├── CommBus.java                                      (T22)
 │   │   │   └── WorldOps.java                                     (T20)
 │   │   └── mixin/
-│   │       ├── PlayerListMixin.java                              (T21)
-│   │       ├── KickPlayerMixin.java                              (T21)
+│   │       ├── KickPlayerMixin.java                              (T21; PlayerListMixin deferred to M1)
 │   │       └── ChatMessageMixin.java                             (T23)
 │   └── src/main/resources/
 │       ├── fabric.mod.json                                       (T19)
@@ -480,7 +479,6 @@ repos:
       - id: mypy
         additional_dependencies:
           - pydantic>=2.9.0
-          - types-requests
         args: [--config-file=pyproject.toml]
         files: ^src/aiutopia/
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -1937,12 +1935,16 @@ from aiutopia.common.ids import new_event_id
 from aiutopia.schemas.enums import ExpectedReplyType, SCHEMA_VERSION_LLM_PLAN
 
 
+_ULID_PATTERN = r"^[0-9A-HJKMNP-TV-Z]{26}$"
+
+
 class ChatEvent(BaseModel):
-    event_id:             str  = Field(default_factory=new_event_id)
+    event_id:             str  = Field(default_factory=new_event_id,
+                                        pattern=_ULID_PATTERN)
     schema_version:       str  = SCHEMA_VERSION_LLM_PLAN
     sender_player_uuid:   str  = Field(..., description="Mojang UUID of player")
     sender_player_name:   str  = Field(..., min_length=1, max_length=16)
-    addressed_agent_uuid: str
+    addressed_agent_uuid: str  = Field(..., pattern=_ULID_PATTERN)
     addressed_agent_name: str  = Field(..., min_length=1, max_length=16)
     text:                 str  = Field(..., min_length=1, max_length=1000,
         description="raw chat text WITHOUT the leading @<agent_name> prefix")
@@ -1950,6 +1952,8 @@ class ChatEvent(BaseModel):
     expected_reply_type:  ExpectedReplyType = "text"
     suppressed_in_chat:   bool = True
 ```
+
+> NOTE: `_ULID_PATTERN` is duplicated across `chat.py`, `failure.py`, and `plan.py` so each schema module is self-contained for type-checkers. The canonical regex lives in `aiutopia.common.ids.ULID_REGEX` — if you change it, change all four references.
 
 - [ ] **Step 4: Implement FailureReport**
 
@@ -1992,13 +1996,17 @@ class FailureDetails(BaseModel):
     )
 
 
+_ULID_PATTERN = r"^[0-9A-HJKMNP-TV-Z]{26}$"
+
+
 class FailureReport(BaseModel):
-    report_id:        str               = Field(default_factory=new_report_id)
+    report_id:        str               = Field(default_factory=new_report_id,
+                                                  pattern=_ULID_PATTERN)
     schema_version:   str               = SCHEMA_VERSION_LLM_PLAN
-    plan_id:          str
-    subgoal_id:       str
+    plan_id:          str               = Field(..., pattern=_ULID_PATTERN)
+    subgoal_id:       str               = Field(..., pattern=_ULID_PATTERN)
     role:             RoleId
-    agent_uuid:       str
+    agent_uuid:       str               = Field(..., pattern=_ULID_PATTERN)
     status:           Literal["failed"] = "failed"
     failure_details:  FailureDetails
     partial_progress: PartialProgress
@@ -2042,7 +2050,7 @@ from aiutopia.schemas.plan import (
 def _sg(role: str = "gatherer", sgid: str | None = None,
         fallbacks: list[str] | None = None) -> Subgoal:
     return Subgoal(
-        subgoal_id=sgid or "01J0SUBGOAL1234567890ABCDE",
+        subgoal_id=sgid or "01J0SG0000123456789ABCDE0Y",
         role=role,
         goal_specification=GoalSpecification(
             target_state=TargetState(inventory_delta={"oak_log": 32}),
@@ -2082,19 +2090,19 @@ def test_timeout_ticks_capped_at_12000() -> None:
 
 
 def test_dependency_missing_subgoal_id_raises() -> None:
-    a = _sg(sgid="01J0SUBGOALAAAAAAAAAAAAAAA")
+    a = _sg(sgid="01J0SG0001000000000000000A")
     with pytest.raises(Exception):
         LlmPlanOutput(
             high_level_goal="g",
             subgoals=[a],
             dependencies=[Dependency(before=a.subgoal_id,
-                                      after="01J0SUBGOALBBBBBBBBBBBBBBB")],
+                                      after="01J0SG0002000000000000000B")],
             created_at=1, created_by="stub-planner",
         )
 
 
 def test_dependency_self_loop_raises() -> None:
-    a = _sg(sgid="01J0SUBGOALAAAAAAAAAAAAAAA")
+    a = _sg(sgid="01J0SG0001000000000000000A")
     with pytest.raises(Exception):
         LlmPlanOutput(
             high_level_goal="g",
@@ -2105,9 +2113,9 @@ def test_dependency_self_loop_raises() -> None:
 
 
 def test_dag_cycle_detection_via_kahn() -> None:
-    a = _sg(sgid="01J0SUBGOALAAAAAAAAAAAAAAA")
-    b = _sg(sgid="01J0SUBGOALBBBBBBBBBBBBBBB")
-    c = _sg(sgid="01J0SUBGOALCCCCCCCCCCCCCCC")
+    a = _sg(sgid="01J0SG0001000000000000000A")
+    b = _sg(sgid="01J0SG0002000000000000000B")
+    c = _sg(sgid="01J0SG0003000000000000000C")
     with pytest.raises(Exception):
         LlmPlanOutput(
             high_level_goal="g",
@@ -2122,8 +2130,8 @@ def test_dag_cycle_detection_via_kahn() -> None:
 
 
 def test_fallback_pointing_to_unknown_subgoal_raises() -> None:
-    a = _sg(sgid="01J0SUBGOALAAAAAAAAAAAAAAA",
-            fallbacks=["01J0SUBGOALZZZZZZZZZZZZZZZ"])
+    a = _sg(sgid="01J0SG0001000000000000000A",
+            fallbacks=["01J0SG0099000000000000000Z"])
     with pytest.raises(Exception):
         LlmPlanOutput(
             high_level_goal="g",
@@ -2135,7 +2143,7 @@ def test_fallback_pointing_to_unknown_subgoal_raises() -> None:
 def test_nl_summary_max_length_1500() -> None:
     with pytest.raises(Exception):
         Subgoal(
-            subgoal_id="01J0SUBGOAL1234567890ABCDE",
+            subgoal_id="01J0SG0000123456789ABCDE0Y",
             role="gatherer",
             goal_specification=GoalSpecification(
                 target_state=TargetState(inventory_delta={"x": 1}),
@@ -2169,6 +2177,8 @@ from aiutopia.schemas.enums import (
     FailureType, PlannerSource, RoleId, SCHEMA_VERSION_LLM_PLAN,
 )
 
+_ULID_PATTERN = r"^[0-9A-HJKMNP-TV-Z]{26}$"
+
 
 class TargetState(BaseModel):
     inventory_delta:    dict[str, int] = Field(default_factory=dict)
@@ -2178,8 +2188,14 @@ class TargetState(BaseModel):
 
     @model_validator(mode="after")
     def _at_least_one(self) -> "TargetState":
-        if not any([self.inventory_delta, self.spatial_target,
-                    self.blueprint_target, self.threat_neutralized]):
+        # Distinguish "not set" (None / empty) from "set to False" — a
+        # defender goal `threat_neutralized=False` ("ensure threat is NOT
+        # in the neutralized state yet") is valid. Truthiness alone would
+        # treat False as falsy and silently reject it.
+        if (not self.inventory_delta
+            and self.spatial_target is None
+            and self.blueprint_target is None
+            and self.threat_neutralized is None):
             raise ValueError("TargetState requires at least one target field")
         return self
 
@@ -2204,7 +2220,8 @@ class GoalSpecification(BaseModel):
 
 
 class Subgoal(BaseModel):
-    subgoal_id:         str = Field(default_factory=new_subgoal_id)
+    subgoal_id:         str = Field(default_factory=new_subgoal_id,
+                                     pattern=_ULID_PATTERN)
     role:               RoleId
     priority:           int = Field(default=5, ge=0, le=10)
     goal_specification: GoalSpecification
@@ -2214,12 +2231,13 @@ class Subgoal(BaseModel):
 
 
 class Dependency(BaseModel):
-    before: str
-    after:  str
+    before: str = Field(..., pattern=_ULID_PATTERN)
+    after:  str = Field(..., pattern=_ULID_PATTERN)
 
 
 class LlmPlanOutput(BaseModel):
-    plan_id:                     str = Field(default_factory=new_plan_id)
+    plan_id:                     str = Field(default_factory=new_plan_id,
+                                              pattern=_ULID_PATTERN)
     schema_version:              str = SCHEMA_VERSION_LLM_PLAN
     high_level_goal:             str = Field(..., min_length=1, max_length=400)
     high_level_goal_template_id: str | None = Field(None,
@@ -3163,11 +3181,7 @@ Create `fabric_mod/src/main/resources/aiutopia.mixins.json`:
   "compatibilityLevel": "JAVA_21",
   "mixins": [],
   "client": [],
-  "server": [
-    "PlayerListMixin",
-    "KickPlayerMixin",
-    "ChatMessageMixin"
-  ],
+  "server": [],
   "injectors": {
     "defaultRequire": 1
   }
@@ -3188,10 +3202,10 @@ This is a *server-side* mod by design — install on a Fabric 1.21.1 dedicated s
 - **`Py4JEntryPoint`** — Java methods exposed to Python via Py4J. Implements
   `observationsAll()`, `motorBridge()`, `commBus()`, `resetWorld()`,
   `advanceTickAwaitEvents()`. Forked from UnionClef.
-- **Mixins:**
-  - `PlayerListMixin` — hide Carpet fake players from `/list` for non-admins.
-  - `KickPlayerMixin` — block non-admin kicks of Carpet fake players.
-  - `ChatMessageMixin` — intercept `@<agent_name>` chat → emit ChatEvent.
+- **Mixins (added incrementally per the task list):**
+  - `KickPlayerMixin` (T21) — block `/kick` of Carpet fake players.
+  - `ChatMessageMixin` (T23) — intercept `@<agent_name>` chat → emit ChatEvent.
+  - `PlayerListMixin` — deferred to M1 (per-recipient `/list` filter requires non-trivial mapping work).
 
 ## Build
 
@@ -3388,12 +3402,17 @@ public class MotorBridge {
     public void attachServer(MinecraftServer server) { this.server = server; }
     public void detachServer()                       { this.server = null;   }
 
-    /** Dispatch a parameterized skill. M0 stub: logs and returns. */
+    /** Dispatch a parameterized skill. M0 stub: enqueues a no-op on the
+     *  server thread so we exercise the public scheduling API. M1 replaces
+     *  the lambda body with the actual skill dispatch.
+     *
+     *  NOTE: `MinecraftServer.execute(Runnable)` is the public API for
+     *  scheduling work on the main thread. `ServerTask` is package-private
+     *  and cannot be instantiated from outside `net.minecraft.server`. */
     public void dispatchSkill(String agentId, String encodedAction,
                               String skillInvocationId) {
-        // TODO M1: parse encodedAction (JSON), route to scripted motor.
         if (server != null) {
-            server.send(new net.minecraft.server.ServerTask(0, () -> { /* no-op */ }));
+            server.execute(() -> { /* no-op stub — M1 wires real motor */ });
         }
     }
 
@@ -3452,16 +3471,17 @@ git commit -m "feat(mod): Py4JEntryPoint + MotorBridge + WorldOps stubs (§7.3 s
 
 ---
 
-### Task 21: PlayerList + KickPlayer guard mixins
+### Task 21: AgentRegistry + KickPlayer guard mixin
+
+> **Scope change vs initial sketch:** `PlayerListMixin` is **NOT** built in M0. The per-recipient `/list` filter requires either rewriting `PlayerListS2CPacket` per send or hooking `ServerPlayNetworkHandler.sendPacket` — both depend on mapping signatures that vary across Yarn revisions and are easy to silently no-op. Deferring to M1 (alongside the first non-trivial mixin work) avoids dead code in the M0 jar. `/list` will show fake players in M0; not a blocker for the smoke test.
 
 **Files:**
-- Create: `fabric_mod/src/main/java/dev/aiutopia/mod/mixin/PlayerListMixin.java`
 - Create: `fabric_mod/src/main/java/dev/aiutopia/mod/mixin/KickPlayerMixin.java`
 - Create: `fabric_mod/src/main/java/dev/aiutopia/mod/agent/AgentRegistry.java`
 
 - [ ] **Step 1: Write the in-process agent name registry**
 
-`AgentRegistry` is the single source of truth for "is this player name an AI agent?" — both mixins consult it. It is populated when an agent is spawned via Py4J (`agent spawn` CLI). M0 stores in-memory; M5 backs to identity.db.
+`AgentRegistry` is the single source of truth for "is this player name an AI agent?" — the mixin consults it. It is populated when an agent is spawned via Py4J (`agent spawn` CLI). M0 stores in-memory; M5 backs to identity.db.
 
 Create `fabric_mod/src/main/java/dev/aiutopia/mod/agent/AgentRegistry.java`:
 ```java
@@ -3493,64 +3513,37 @@ public final class AgentRegistry {
 }
 ```
 
-- [ ] **Step 2: Write the PlayerList mixin**
+- [ ] **Step 2: Verify the `KickCommand` mapping (HARD GATE — do this before Step 3)**
 
-Create `fabric_mod/src/main/java/dev/aiutopia/mod/mixin/PlayerListMixin.java`:
-```java
-package dev.aiutopia.mod.mixin;
+Vanilla `/kick`'s static handler is named `kick` (not `execute`) and takes `Collection<GameProfile>` (not `Collection<ServerPlayerEntity>`) in MC 1.21.1 Yarn. Verify before writing the mixin:
 
-import dev.aiutopia.mod.agent.AgentRegistry;
-import net.minecraft.network.packet.s2c.play.PlayerListS2CPacket;
-import net.minecraft.network.packet.s2c.play.PlayerListS2CPacket.Entry;
-import net.minecraft.server.network.ServerPlayNetworkHandler;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.PlayerManager;
-import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.util.List;
-
-/** Hide Carpet fake players from `/list` output for non-operator viewers. */
-@Mixin(PlayerManager.class)
-public abstract class PlayerListMixin {
-
-    /** Filter the player-list packet just before send.
-     *  Only the *recipient* sees the filtered list; server state is unchanged. */
-    @Inject(method = "sendToAll", at = @At("HEAD"))
-    private void aiutopia$filterListPacket(net.minecraft.network.packet.Packet<?> packet,
-                                            CallbackInfo ci) {
-        // Real packet rewriting must happen per-recipient. M0 keeps the
-        // server broadcasting normally; the per-recipient filter is wired
-        // when ServerPlayNetworkHandler.sendPacket is intercepted in a
-        // follow-up mixin (deferred to T23.5 once we know which mixin
-        // target works against current Yarn mappings).
-        // Logging stub only.
-    }
-}
+```bash
+cd fabric_mod
+./gradlew genSources
+grep -A 12 "class KickCommand" \
+    build/loom-cache/remappedSrc/net/minecraft/server/command/KickCommand.java
 ```
 
-> NOTE: the *correct* per-recipient filter requires either rewriting
-> `PlayerListS2CPacket` per send, or hooking `ServerPlayNetworkHandler.sendPacket`.
-> The mixin target signature depends on current Yarn mappings; rather than
-> embed a possibly-wrong `@Inject` target here, M0 ships the registry +
-> mixin scaffold and **leaves the per-recipient filter implementation as
-> the first follow-up in M1**. The smoke test in T30 checks that fake
-> players appear (op view); polishing the non-op filtering is M1.
+Expected: a static method like
+```
+private static int kick(ServerCommandSource source,
+                         Collection<GameProfile> targets,
+                         Text reason) throws CommandSyntaxException
+```
 
-Update `aiutopia.mixins.json` if needed so the `PlayerListMixin` reference doesn't break the build — keep it listed; the empty injection compiles fine.
+If your Yarn version reports a different signature (different method name, different param order, or `Collection<ServerPlayerEntity>` instead of `Collection<GameProfile>`), update the mixin in Step 3 to match. **Do not skip this step** — a wrong `@Inject` target silently fails to apply and the kick guard becomes a no-op.
 
-- [ ] **Step 3: Write the KickPlayer mixin**
+- [ ] **Step 3: Write the KickPlayer mixin (signature matched to MC 1.21.1)**
 
 Create `fabric_mod/src/main/java/dev/aiutopia/mod/mixin/KickPlayerMixin.java`:
 ```java
 package dev.aiutopia.mod.mixin;
 
+import com.mojang.authlib.GameProfile;
 import dev.aiutopia.mod.agent.AgentRegistry;
 import net.minecraft.server.command.KickCommand;
 import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.text.Text;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -3558,27 +3551,32 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.Collection;
 
-/** Block non-admin (`/kick`) of registered AI agents.
- *  Op-level 2+ (typical for /kick) is allowed; lower-permission sources
- *  attempting to kick an agent receive a polite refusal. */
+/** Block `/kick` of registered AI agents — for ALL permission levels.
+ *
+ *  Permission semantics: vanilla `/kick` already requires permission
+ *  level 3, so any source that reaches this mixin is already op-3+.
+ *  Filtering by permission level here would be a no-op. Instead we
+ *  block ALL `/kick` of agents (including from full operators) and
+ *  force the explicit `aiutopia agent kill <uuid>` CLI path, so
+ *  accidental misclick kicks can never trigger permadeath.
+ *
+ *  Target verified in Step 2 against MC 1.21.1 Yarn mappings:
+ *  KickCommand.kick(ServerCommandSource, Collection<GameProfile>, Text).
+ */
 @Mixin(KickCommand.class)
 public abstract class KickPlayerMixin {
 
-    @Inject(method = "execute", at = @At("HEAD"), cancellable = true)
-    private static void aiutopia$blockKickOfAgents(ServerCommandSource source,
-                                                    Collection<ServerPlayerEntity> targets,
-                                                    net.minecraft.text.Text reason,
-                                                    CallbackInfoReturnable<Integer> cir) {
-        if (source.hasPermissionLevel(3)) {
-            // Full operator — allow.
-            return;
-        }
-        for (ServerPlayerEntity t : targets) {
-            if (AgentRegistry.isAgent(t.getGameProfile().getName())) {
-                source.sendError(net.minecraft.text.Text.literal(
-                    "AI Utopia: cannot kick agent '" + t.getGameProfile().getName()
-                    + "' (use op-level 3 or `aiutopia agent kill`)."
-                ));
+    @Inject(method = "kick", at = @At("HEAD"), cancellable = true)
+    private static void aiutopia$blockKickOfAgents(
+            ServerCommandSource source,
+            Collection<GameProfile> targets,
+            Text reason,
+            CallbackInfoReturnable<Integer> cir) {
+        for (GameProfile profile : targets) {
+            if (AgentRegistry.isAgent(profile.getName())) {
+                source.sendError(Text.literal(
+                    "AI Utopia: cannot kick agent '" + profile.getName()
+                    + "' via /kick. Use `aiutopia agent kill <uuid>` instead."));
                 cir.setReturnValue(0);
                 return;
             }
@@ -3587,22 +3585,33 @@ public abstract class KickPlayerMixin {
 }
 ```
 
-- [ ] **Step 4: Verify Java still compiles**
+- [ ] **Step 4: Verify mixin manifest lists only `KickPlayerMixin`**
+
+Edit `fabric_mod/src/main/resources/aiutopia.mixins.json` and ensure the `server` array contains exactly:
+```json
+  "server": [
+    "KickPlayerMixin"
+  ],
+```
+
+(If a stale entry for `PlayerListMixin` or `ChatMessageMixin` is present from earlier scaffolding, only `KickPlayerMixin` should be listed at the end of this task — `ChatMessageMixin` is added in T23.)
+
+- [ ] **Step 5: Build verify**
 
 Run (from `fabric_mod/`):
 ```bash
 ./gradlew compileJava
 ```
 
-Expected: `BUILD SUCCESSFUL`. If `KickCommand` class name has shifted under your Yarn mappings, run `./gradlew genSources` and locate the current class name in `build/loom-cache/.../net/minecraft/server/command/`; update the mixin target.
+Expected: `BUILD SUCCESSFUL`. Confirm at the end of the log that Mixin applied successfully — look for `[Mixin] Mixing KickPlayerMixin from aiutopia.mixins.json into net.minecraft.server.command.KickCommand` (or equivalent). If you see `INVALID_INJECTION_DESC`, Step 2 verification was wrong; re-do it.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add fabric_mod/src/main/java/dev/aiutopia/mod/agent/ \
-        fabric_mod/src/main/java/dev/aiutopia/mod/mixin/PlayerListMixin.java \
-        fabric_mod/src/main/java/dev/aiutopia/mod/mixin/KickPlayerMixin.java
-git commit -m "feat(mod): AgentRegistry + PlayerList/Kick guard mixin scaffold"
+        fabric_mod/src/main/java/dev/aiutopia/mod/mixin/KickPlayerMixin.java \
+        fabric_mod/src/main/resources/aiutopia.mixins.json
+git commit -m "feat(mod): AgentRegistry + KickPlayerMixin (block /kick of agents)"
 ```
 
 ---
@@ -3759,25 +3768,44 @@ public abstract class ChatMessageMixin {
 }
 ```
 
-> NOTE: `handleDecoratedMessage` is the 1.21.x signed-chat hook. If your
-> Yarn mappings have a different name, generate sources (`./gradlew genSources`)
-> and find the method whose body calls `MessageType.CHAT` / `broadcast(...)`.
+- [ ] **Step 4: HARD verification — confirm `handleDecoratedMessage` signature against your Yarn mappings**
 
-- [ ] **Step 4: Verify build still compiles + mixin registers**
+`handleDecoratedMessage(SignedMessage)` is the 1.21.1 signed-chat hook in current Yarn, but the LVT slot order and the exact method name vary across Yarn revisions. Run before building:
+
+```bash
+cd fabric_mod
+./gradlew genSources
+grep -A 5 -E "handleDecoratedMessage|handleMessage|onChatMessage" \
+    build/loom-cache/remappedSrc/net/minecraft/server/network/ServerPlayNetworkHandler.java \
+    | head -30
+```
+
+Expected: one method whose body broadcasts the chat message (calls something like `MessageType.CHAT` or `playerManager.broadcast(...)`) — that's your target. If the method name is not `handleDecoratedMessage`, update `method = "..."` in the `@Inject` accordingly.
+
+- [ ] **Step 5: Verify build + mixin registers**
 
 Run (from `fabric_mod/`):
 ```bash
 ./gradlew build
 ```
 
-Expected: `BUILD SUCCESSFUL`. Generated jar at `build/libs/aiutopia-mod-0.0.0-m0.jar`.
+Expected: `BUILD SUCCESSFUL`. Generated jar at `build/libs/aiutopia-mod-0.0.0-m0.jar`. Inspect the build log near the end and confirm the mixin actually applied — look for `[Mixin] Mixing ChatMessageMixin from aiutopia.mixins.json into net.minecraft.server.network.ServerPlayNetworkHandler` (or equivalent). If you see `INVALID_INJECTION_DESC` or `Could not find target method`, Step 4's verification was wrong; redo it.
 
-- [ ] **Step 5: Commit**
+Also update `fabric_mod/src/main/resources/aiutopia.mixins.json` `server` array to add `ChatMessageMixin`:
+```json
+  "server": [
+    "KickPlayerMixin",
+    "ChatMessageMixin"
+  ],
+```
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add fabric_mod/src/main/java/dev/aiutopia/mod/chat/ \
         fabric_mod/src/main/java/dev/aiutopia/mod/mixin/ChatMessageMixin.java \
-        fabric_mod/src/main/java/dev/aiutopia/mod/Py4JEntryPoint.java
+        fabric_mod/src/main/java/dev/aiutopia/mod/Py4JEntryPoint.java \
+        fabric_mod/src/main/resources/aiutopia.mixins.json
 git commit -m "feat(mod): ChatMessageMixin intercepts @<agent> chat → ChatEventBuffer"
 ```
 
@@ -3819,11 +3847,11 @@ services:
     environment:
       # CRITICAL: Generational ZGC, NOT G1GC. G1's 200ms pauses stall the
       # tick loop and silently destroy training stability.
-      - JAVA_OPTS=-Xms3g -Xmx3g
-                  -XX:+UseZGC -XX:+ZGenerational
-                  -XX:+UnlockExperimentalVMOptions
-                  -XX:+UseTransparentHugePages
-                  -Daiutopia.py4j.port=25100
+      # QUOTED + single line because YAML's folding rules for unquoted
+      # multi-line list items are parser-dependent — Docker Compose has
+      # historically split the lines and silently dropped the ZGC flags,
+      # leaving the container on default G1GC.
+      - "JAVA_OPTS=-Xms3g -Xmx3g -XX:+UseZGC -XX:+ZGenerational -XX:+UnlockExperimentalVMOptions -XX:+UseTransparentHugePages -Daiutopia.py4j.port=25100"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "nc", "-z", "localhost", "25100"]
@@ -3906,15 +3934,21 @@ chmod 600 secrets/anthropic_key
 ```
 ```
 
-- [ ] **Step 3: Update .gitignore**
+- [ ] **Step 3: Append to .gitignore (do NOT overwrite)**
 
-Add to `.gitignore` (use Edit on the existing file):
-```
+Append these lines to the existing `.gitignore` (the file already exists from the early commit; do not replace it):
+
+```bash
+cat >> .gitignore <<'EOF'
+
 # Secrets (allowlist README + .gitkeep)
 secrets/*
 !secrets/.gitkeep
 !secrets/README.md
+EOF
 ```
+
+Verify with: `git diff .gitignore` — should show only the new lines added at the end.
 
 - [ ] **Step 4: Commit**
 
@@ -4689,26 +4723,30 @@ Create `src/aiutopia/cli/agent.py`:
 ```python
 """`aiutopia agent <spawn|kill|list>` — minimal M0 surface.
 
-`spawn` does TWO things:
+`spawn` does THREE things:
   1. Insert a row in identity.db (so the agent has a persistent identity)
-  2. Call Py4J to Carpet `/player <name> spawn` so the visible Carpet
+  2. Create the Chroma collections `mem_{uuid}` and `skill_lib_{uuid}`
+     (so `aiutopia memory inspect <uuid>` returns "(empty)" instead of
+     "no memory collection")
+  3. Call Py4J to Carpet `/player <name> spawn` so the visible Carpet
      fake player appears in the connected MC client.
 
-If --no-fabric is passed, step 2 is skipped (useful for unit tests + when
-no Fabric server is running)."""
+If --no-fabric is passed, step 3 is skipped (useful for unit tests + when
+no Fabric server is running). Steps 1 and 2 always run."""
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 
 import typer
 
 from aiutopia.common.config import Paths, Py4JConfig
+from aiutopia.common.ids import memory_id_for, skill_library_id_for
 from aiutopia.common.logging import get_logger
 from aiutopia.env.bridge import FabricBridge
 from aiutopia.identity.service import IdentityService, init_identity_db
 from aiutopia.identity.skin_pool import deterministic_skin_for_uuid, pick_name
+from aiutopia.memory.client import open_chroma
 
 
 app = typer.Typer(no_args_is_help=True)
@@ -4740,21 +4778,19 @@ def spawn(
 
     typer.echo(f"identity: spawned {chosen_name} ({role}, uuid={agent.agent_uuid})")
 
+    # Always create Chroma collections so memory inspect doesn't 404
+    chroma = open_chroma(paths.chroma_dir)
+    chroma.get_or_create_collection(memory_id_for(agent.agent_uuid))
+    chroma.get_or_create_collection(skill_library_id_for(agent.agent_uuid))
+    typer.echo(f"memory:   collections mem_{agent.agent_uuid} + "
+               f"skill_lib_{agent.agent_uuid} ready")
+
     if no_fabric:
         typer.echo("--no-fabric set; skipping Carpet /player spawn")
         return
 
-    port = py4j_port or Py4JConfig.from_env().production_port
-    log.info("connecting to Fabric Py4J on port %d", port)
-    with FabricBridge(port=port) as bridge:
-        if bridge.health() != "ok":
-            typer.echo("ERROR: Fabric server reports unhealthy; aborting Carpet spawn",
-                       err=True)
-            raise typer.Exit(code=1)
-        # Carpet spawn is dispatched via motorBridge as a one-shot meta-command.
-        # M0 keeps the Carpet command issuance Java-side via a dedicated method
-        # added in T30; for now we just verify the connection works.
-        typer.echo("connected to Fabric (carpet spawn wiring lands in T30)")
+    # The Fabric Py4J call is wired in T30 (this is the M0 stub).
+    typer.echo("(carpet spawn wiring lands in T30)")
 
 
 @app.command("kill")
@@ -4805,13 +4841,19 @@ git commit -m "feat(cli): aiutopia entrypoint + agent spawn/kill/list (registry 
 - Create: `scripts/smoke-test.sh`
 - Create: `tests/integration/test_cli_spawn.py`
 
-- [ ] **Step 1: Add `carpetSpawn(name)` to Java side**
+- [ ] **Step 1: Add `carpetSpawn(name, skin)` to Java side (skin applied via second command)**
 
 Edit `fabric_mod/src/main/java/dev/aiutopia/mod/bridge/WorldOps.java` — add at end of class:
 ```java
     /** Spawn a Carpet fake player. Returns true on success.
-     *  Requires Carpet to be installed on the running server. */
-    public boolean carpetSpawn(String playerName) {
+     *  Requires Carpet to be installed on the running server.
+     *
+     *  If `skin` is non-null and non-empty, follows the spawn with
+     *  `/player <name> loadProfile <skin>` so the agent appears with
+     *  the chosen skin instead of the default. Failure to apply the
+     *  skin is logged but does NOT fail the overall spawn — the
+     *  agent still exists, just with the default skin. */
+    public boolean carpetSpawn(String playerName, String skin) {
         if (server == null) return false;
         try {
             net.minecraft.server.command.CommandManager cm =
@@ -4820,11 +4862,21 @@ Edit `fabric_mod/src/main/java/dev/aiutopia/mod/bridge/WorldOps.java` — add at
                 server.getCommandSource(),
                 "/player " + playerName + " spawn"
             );
-            if (result > 0) {
-                dev.aiutopia.mod.agent.AgentRegistry.registerAgent(playerName);
-                return true;
+            if (result <= 0) return false;
+            dev.aiutopia.mod.agent.AgentRegistry.registerAgent(playerName);
+
+            if (skin != null && !skin.isEmpty()) {
+                int skinResult = cm.executeWithPrefix(
+                    server.getCommandSource(),
+                    "/player " + playerName + " loadProfile " + skin
+                );
+                if (skinResult <= 0) {
+                    dev.aiutopia.mod.AiUtopiaMod.LOG.warn(
+                        "loadProfile {} failed for {}; using default skin",
+                        skin, playerName);
+                }
             }
-            return false;
+            return true;
         } catch (Exception e) {
             dev.aiutopia.mod.AiUtopiaMod.LOG.error(
                 "carpetSpawn failed for {}: {}", playerName, e.getMessage());
@@ -4837,9 +4889,9 @@ Edit `fabric_mod/src/main/java/dev/aiutopia/mod/bridge/WorldOps.java` — add at
 
 Edit `fabric_mod/src/main/java/dev/aiutopia/mod/Py4JEntryPoint.java` — add:
 ```java
-    /** Spawn a Carpet fake player. Returns true on success. */
-    public boolean carpetSpawn(String playerName) {
-        return world.carpetSpawn(playerName);
+    /** Spawn a Carpet fake player with optional skin. Returns true on success. */
+    public boolean carpetSpawn(String playerName, String skin) {
+        return world.carpetSpawn(playerName, skin);
     }
 ```
 
@@ -4847,13 +4899,13 @@ Edit `fabric_mod/src/main/java/dev/aiutopia/mod/Py4JEntryPoint.java` — add:
 
 Edit `src/aiutopia/env/bridge.py` — add to `FabricBridge`:
 ```python
-    def carpet_spawn(self, player_name: str) -> bool:
-        return bool(self.entry_point.carpetSpawn(player_name))
+    def carpet_spawn(self, player_name: str, skin: str | None = None) -> bool:
+        return bool(self.entry_point.carpetSpawn(player_name, skin or ""))
 ```
 
-- [ ] **Step 4: Wire CLI to call it**
+- [ ] **Step 4: Wire CLI to call it (pass skin)**
 
-Edit `src/aiutopia/cli/agent.py` — replace the inside of the `if no_fabric:` else-branch with:
+Edit `src/aiutopia/cli/agent.py` — replace the inside of the `else` branch (when `--no-fabric` is NOT set) with:
 ```python
     port = py4j_port or Py4JConfig.from_env().production_port
     log.info("connecting to Fabric Py4J on port %d", port)
@@ -4862,12 +4914,14 @@ Edit `src/aiutopia/cli/agent.py` — replace the inside of the `if no_fabric:` e
             typer.echo("ERROR: Fabric server reports unhealthy; aborting Carpet spawn",
                        err=True)
             raise typer.Exit(code=1)
-        ok = bridge.carpet_spawn(chosen_name)
+        ok = bridge.carpet_spawn(chosen_name, skin=skin)
         if not ok:
             typer.echo(f"ERROR: Carpet /player {chosen_name} spawn failed", err=True)
             raise typer.Exit(code=2)
-        typer.echo(f"carpet: /player {chosen_name} spawn → ok")
+        typer.echo(f"carpet: /player {chosen_name} spawn (skin={skin}) → ok")
 ```
+
+The `skin` variable was computed earlier in T29 via `deterministic_skin_for_uuid(agent.agent_uuid, role_obj.default_skin_pool)`. It is now wired through to Carpet — no longer dead code.
 
 - [ ] **Step 5: Rebuild Fabric mod**
 
