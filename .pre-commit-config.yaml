@@ -11,7 +11,12 @@ repos:
       - id: mypy
         additional_dependencies:
           - pydantic>=2.9.0
-        args: [--config-file=pyproject.toml]
+        # pass_filenames: false ensures mypy type-checks the whole package
+        # (not just the files changed in a commit) — required for strict-mode
+        # cross-module checks to catch breakages.
+        # `files:` still gates whether the hook runs at all.
+        pass_filenames: false
+        args: [--config-file=pyproject.toml, src/aiutopia]
         files: ^src/aiutopia/
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0

@@ -67,6 +67,9 @@ markers = [
 ]
 asyncio_mode = "auto"
 
+# tests/ are intentionally excluded from mypy (only src/aiutopia is checked)
+# to keep test ergonomics loose. If a strict-mode regression sneaks past
+# a test, add a relaxed override here rather than untyping production code.
 [tool.mypy]
 python_version = "3.12"
 strict = true
