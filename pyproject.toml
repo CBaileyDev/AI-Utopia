@@ -1,0 +1,81 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aiutopia"
+version = "0.0.0+m0"
+description = "Multi-agent Minecraft AI village — persistent RL with LLM coordination"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "Carte", email = "barker_carter@icloud.com" }]
+keywords = ["minecraft", "multi-agent", "reinforcement-learning", "llm"]
+
+dependencies = [
+  # MARL stack (declared in M0; exercised in M1)
+  "ray[rllib,tune]>=2.40.0",
+  "pettingzoo>=1.24.3",
+  "gymnasium>=1.0.0",
+  "torch>=2.4.0",
+  # Schema layer (§6)
+  "pydantic>=2.9.0",
+  "python-ulid>=3.0.0",
+  # Memory layer (§4.9, §5.6)
+  "chromadb>=0.5.20",
+  "sentence-transformers>=3.2.0",   # BGE-small-en-v1.5
+  # Bridge to Java (§7.3)
+  "py4j>=0.10.9.9",
+  # CLI (§7.5)
+  "typer>=0.13.0",
+  "rich>=13.9.0",
+  # Numerics
+  "numpy>=2.0.0",
+  "scipy>=1.14.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+  "pytest-asyncio>=0.24.0",
+  "pytest-mock>=3.14.0",
+  "pytest-xdist>=3.6.0",
+  "ruff>=0.7.0",
+  "mypy>=1.13.0",
+  "pre-commit>=4.0.0",
+]
+planner-runtime = [
+  "anthropic>=0.39.0",              # Claude Haiku (M5)
+  "fastapi>=0.115.0",                # dashboard SSE sidecar (M6)
+  "sse-starlette>=2.1.0",
+  "uvicorn[standard]>=0.32.0",
+]
+
+[project.scripts]
+aiutopia = "aiutopia.cli.app:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aiutopia"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+  "integration: marks tests requiring external services (Chroma, Fabric mod)",
+  "determinism: marks determinism regression tests (require GPU + saved weights)",
+  "slow: marks slow tests",
+]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_no_return = true
+disallow_any_generics = true
+disallow_untyped_defs = true
+files = ["src/aiutopia"]
+
+[[tool.mypy.overrides]]
+module = ["py4j.*", "chromadb.*", "sentence_transformers.*", "ray.*", "pettingzoo.*"]
+ignore_missing_imports = true
