@@ -1245,7 +1245,7 @@ class Dependency(BaseModel):
     after:  str
 
 class LlmPlanOutput(BaseModel):
-    plan_id:                     str = Field(default_factory=lambda: str(ulid.new()))
+    plan_id:                     str = Field(default_factory=lambda: str(ulid.ULID()))
     schema_version:              str = SCHEMA_VERSION_LLM_PLAN
     high_level_goal:             str = Field(..., min_length=1, max_length=400)
     high_level_goal_template_id: Optional[str] = Field(
@@ -1338,7 +1338,7 @@ class GoalSpecification(BaseModel):
     termination_conditions: TerminationConditions
 
 class Subgoal(BaseModel):
-    subgoal_id:         str  = Field(default_factory=lambda: str(ulid.new()))
+    subgoal_id:         str  = Field(default_factory=lambda: str(ulid.ULID()))
     role:               RoleId
     priority:           int  = Field(default=5, ge=0, le=10)
     goal_specification: GoalSpecification
@@ -1378,7 +1378,7 @@ class FailureDetails(BaseModel):
     )
 
 class FailureReport(BaseModel):
-    report_id:        str               = Field(default_factory=lambda: str(ulid.new()))
+    report_id:        str               = Field(default_factory=lambda: str(ulid.ULID()))
     schema_version:   str               = SCHEMA_VERSION_LLM_PLAN
     plan_id:          str
     subgoal_id:       str
@@ -1409,7 +1409,7 @@ def downsample_trace(full_trace, max_entries=200):
 
 ```python
 class ChatEvent(BaseModel):
-    event_id:             str  = Field(default_factory=lambda: str(ulid.new()))
+    event_id:             str  = Field(default_factory=lambda: str(ulid.ULID()))
     schema_version:       str  = SCHEMA_VERSION_LLM_PLAN
     sender_player_uuid:   str  = Field(..., description="Mojang UUID of player")
     sender_player_name:   str  = Field(..., min_length=1, max_length=16)

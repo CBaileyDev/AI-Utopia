@@ -588,8 +588,14 @@ ULID_REGEX = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
 
 
 def new_ulid() -> str:
-    """Return a new ULID as a 26-character Crockford-base32 string."""
-    return str(ulid.new())
+    """Return a new ULID as a 26-character Crockford-base32 string.
+
+    NOTE: not monotonic across calls — each ULID's random component is
+    independent. Fine at our event rate (orders of magnitude below the
+    1M/sec where collisions become a concern). If strict ordering within
+    the same millisecond is ever needed, switch to a MonotonicULIDFactory.
+    """
+    return str(ulid.ULID())
 
 
 def is_ulid(value: str) -> bool:
