@@ -59,6 +59,7 @@ packages = ["src/aiutopia"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]      # allows `pytest` from repo root without editable install
 addopts = "-ra --strict-markers --strict-config"
 markers = [
   "integration: marks tests requiring external services (Chroma, Fabric mod)",
