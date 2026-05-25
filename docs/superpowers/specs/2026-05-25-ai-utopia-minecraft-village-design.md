@@ -28,7 +28,7 @@ A persistent multi-agent reinforcement-learning system in which four specialized
 ### Locked stack
 
 - **MARL framework:** PettingZoo Parallel API + Ray RLlib direct (MARLlib rejected — unmaintained since late 2023)
-- **Algorithm:** IPPO start → MAPPO at first cooperative milestone → HAPPO only if heterogeneity causes policy collapse (sec07 trigger)
+- **Algorithm:** IPPO start → MAPPO at first cooperative milestone *if IPPO+CTDE baseline shows instability* (HeMAC suggests IPPO often suffices in heterogeneous scenarios) → HAPPO only if heterogeneity causes policy collapse (sec07 trigger)
 - **LLM planner:** Claude Haiku API, event-driven (5–20 calls/hr); auto-fallback to local Qwen 14B on budget cap; halt + alert on Qwen unavailability
 - **Bridge:** Fork of UnionClef Py4J pattern (MC 1.21.x Fabric)
 - **Identity bridge in production:** Carpet `/player <name> spawn` fake players driven via Py4J
@@ -57,7 +57,7 @@ A persistent multi-agent reinforcement-learning system in which four specialized
 | M5 | 6–8 | LLM integration + Level-D identity | Real Claude Haiku planner replaces stub; identity layer folded in | End-to-end "build a village" completed without manual subgoal injection over 14 in-game days |
 | M6 | 4–6 | Production deployment | 6 parallel training instances; live production server with friends invited | 30 in-game days, no major instability; plan-cache & memory healthy |
 
-Total: 24–30 weeks at 15–20 hr/wk; with 9950X3D upgrade vs research's 9800X3D baseline, expect ~22–28 weeks.
+Total: 24–34 weeks at 10–15 hr/wk; with 9950X3D upgrade vs research's 9800X3D baseline, expect ~22–28 weeks.
 
 ### Showstopper risks
 
@@ -1466,6 +1466,8 @@ on_failed_to_pending (fallback):
 ```
 
 ### 6.7 Plan cache schema
+
+`plan_cache` lives in `/var/lib/aiutopia/planner_state.db` alongside the `planner_state` table from §3.4.
 
 ```sql
 CREATE TABLE plan_cache (
