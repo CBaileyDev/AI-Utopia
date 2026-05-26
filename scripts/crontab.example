@@ -1,0 +1,11 @@
+# AI Utopia backup schedule.
+# Install with `crontab scripts/crontab.example` (after editing paths).
+
+AIUTOPIA_ROOT=/var/lib/aiutopia
+AIUTOPIA_BACKUP_DIR=/mnt/nas/aiutopia
+
+# Daily at 04:00
+0 4 * * *  AIUTOPIA_BACKUP_DIR=$AIUTOPIA_BACKUP_DIR/daily /opt/aiutopia/scripts/backup-daily.sh
+
+# Weekly on Sunday at 04:30
+30 4 * * 0 AIUTOPIA_BACKUP_DIR=$AIUTOPIA_BACKUP_DIR/weekly /opt/aiutopia/scripts/backup-weekly.sh
