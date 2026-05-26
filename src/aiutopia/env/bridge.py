@@ -23,7 +23,12 @@ class FabricBridge:
         self.entry_point: Any = None
 
     def open(self) -> None:
-        self.gw = JavaGateway(GatewayParameters(port=self.port, auto_field=True))
+        # py4j JavaGateway's first positional arg is `gateway_client`, NOT
+        # `gateway_parameters`. Passing GatewayParameters positionally makes
+        # py4j try to call .send_command/.shutdown_gateway on it later and
+        # crash with AttributeError. Use the kwarg.
+        self.gw = JavaGateway(gateway_parameters=GatewayParameters(
+            port=self.port, auto_field=True))
         self.entry_point = self.gw.entry_point
 
     def close(self) -> None:
