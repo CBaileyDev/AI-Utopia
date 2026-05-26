@@ -5,7 +5,7 @@
   "compatibilityLevel": "JAVA_21",
   "mixins": [],
   "client": [],
-  "server": [],
+  "server": ["KickPlayerMixin"],
   "injectors": {
     "defaultRequire": 1
   }
