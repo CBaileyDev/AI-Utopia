@@ -75,3 +75,6 @@ class FabricBridge:
     def drain_chat_events(self) -> list[dict]:
         raw = self.entry_point.drainChatEvents()
         return [json.loads(str(x)) for x in raw]
+
+    def carpet_spawn(self, player_name: str, skin: str | None = None) -> bool:
+        return bool(self.entry_point.carpetSpawn(player_name, skin or ""))

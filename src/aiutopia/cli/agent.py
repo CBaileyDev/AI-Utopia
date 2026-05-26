@@ -66,8 +66,18 @@ def spawn(
         typer.echo("--no-fabric set; skipping Carpet /player spawn")
         return
 
-    # The Fabric Py4J call is wired in T30 (this is the M0 stub).
-    typer.echo("(carpet spawn wiring lands in T30)")
+    port = py4j_port or Py4JConfig.from_env().production_port
+    log.info("connecting to Fabric Py4J on port %d", port)
+    with FabricBridge(port=port) as bridge:
+        if bridge.health() != "ok":
+            typer.echo("ERROR: Fabric server reports unhealthy; aborting Carpet spawn",
+                       err=True)
+            raise typer.Exit(code=1)
+        ok = bridge.carpet_spawn(chosen_name, skin=skin)
+        if not ok:
+            typer.echo(f"ERROR: Carpet /player {chosen_name} spawn failed", err=True)
+            raise typer.Exit(code=2)
+        typer.echo(f"carpet: /player {chosen_name} spawn (skin={skin}) → ok")
 
 
 @app.command("kill")

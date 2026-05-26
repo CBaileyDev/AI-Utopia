@@ -65,4 +65,9 @@ public class Py4JEntryPoint {
     public java.util.List<String> drainChatEvents() {
         return dev.aiutopia.mod.chat.ChatEventBuffer.drainAll();
     }
+
+    /** Spawn a Carpet fake player with optional skin. Returns true on success. */
+    public boolean carpetSpawn(String playerName, String skin) {
+        return world.carpetSpawn(playerName, skin);
+    }
 }
