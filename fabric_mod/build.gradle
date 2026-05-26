@@ -13,8 +13,11 @@ base {
 
 repositories {
     maven { url = "https://maven.fabricmc.net/" }
-    maven { url = "https://masa.dy.fi/maven" }                  // Carpet
     mavenCentral()
+    // Carpet maven (masa.dy.fi) excluded: the :deobf classifier path does
+    // not resolve, and our Java code never imports Carpet types at compile
+    // time — we drive Carpet purely through runtime `/player spawn` command
+    // strings. Add Carpet back if/when M5+ wants compile-time API access.
 }
 
 dependencies {
@@ -26,9 +29,6 @@ dependencies {
     // Py4J — Python ↔ Java bridge (§7.3)
     implementation "net.sf.py4j:py4j:0.10.9.9"
     include        "net.sf.py4j:py4j:0.10.9.9"
-
-    // Carpet API (compile-time; runtime users install the mod separately)
-    modCompileOnly "carpet:fabric-carpet:1.4.147+v240613:deobf"
 }
 
 java {

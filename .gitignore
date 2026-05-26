@@ -33,3 +33,11 @@ runs/
 secrets/*
 !secrets/.gitkeep
 !secrets/README.md
+
+# Fabric mod build artifacts
+fabric_mod/.gradle/
+fabric_mod/build/
+fabric_mod/.idea/
+
+# Local server runtime (mods, world, logs — not part of source)
+server-runtime/

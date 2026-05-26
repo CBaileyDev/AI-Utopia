@@ -34,22 +34,26 @@ public class WorldOps {
         try {
             net.minecraft.server.command.CommandManager cm =
                 server.getCommandManager();
-            int result = cm.executeWithPrefix(
+            // MC 1.21.1 `CommandManager.executeWithPrefix(ServerCommandSource, String)`
+            // returns void. Brigadier exceptions propagate as RuntimeException; a
+            // failed command (e.g. Carpet not installed) silently no-ops. We trust
+            // success if no exception fires and register the agent name.
+            cm.executeWithPrefix(
                 server.getCommandSource(),
                 "/player " + playerName + " spawn"
             );
-            if (result <= 0) return false;
             dev.aiutopia.mod.agent.AgentRegistry.registerAgent(playerName);
 
             if (skin != null && !skin.isEmpty()) {
-                int skinResult = cm.executeWithPrefix(
-                    server.getCommandSource(),
-                    "/player " + playerName + " loadProfile " + skin
-                );
-                if (skinResult <= 0) {
+                try {
+                    cm.executeWithPrefix(
+                        server.getCommandSource(),
+                        "/player " + playerName + " loadProfile " + skin
+                    );
+                } catch (Exception skinErr) {
                     dev.aiutopia.mod.AiUtopiaMod.LOG.warn(
-                        "loadProfile {} failed for {}; using default skin",
-                        skin, playerName);
+                        "loadProfile {} failed for {}: {} — using default skin",
+                        skin, playerName, skinErr.getMessage());
                 }
             }
             return true;
