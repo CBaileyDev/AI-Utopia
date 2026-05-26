@@ -1,0 +1,91 @@
+# Production deployment skeleton — full M6 deliverable.
+# Committed in M0 so the JVM args (Generational ZGC, NOT G1GC) and the
+# localhost-only port bindings live in source from day one.
+#
+# To use:
+#   docker compose -f docker-compose.production.yml up
+# To bring up the local-LLM fallback:
+#   docker compose -f docker-compose.production.yml --profile llm-fallback up
+
+services:
+  fabric-prod:
+    image: aiutopia/fabric-server:1.21.1
+    container_name: aiutopia-fabric-prod
+    cpuset: "12-13"
+    mem_limit: 4g
+    volumes:
+      - ./world:/server/world
+      - ./fabric_mod/build/libs:/server/mods/aiutopia:ro
+      - ./logs/fabric:/server/logs
+    ports:
+      - "25565:25565"                          # MC client
+      - "127.0.0.1:25100:25100"                # Py4J — localhost only
+    environment:
+      # CRITICAL: Generational ZGC, NOT G1GC. G1's 200ms pauses stall the
+      # tick loop and silently destroy training stability.
+      # QUOTED + single line because YAML's folding rules for unquoted
+      # multi-line list items are parser-dependent — Docker Compose has
+      # historically split the lines and silently dropped the ZGC flags,
+      # leaving the container on default G1GC.
+      - "JAVA_OPTS=-Xms3g -Xmx3g -XX:+UseZGC -XX:+ZGenerational -XX:+UnlockExperimentalVMOptions -XX:+UseTransparentHugePages -Daiutopia.py4j.port=25100"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "25100"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  planner:
+    image: aiutopia/planner:latest
+    cpuset: "14"
+    mem_limit: 4g
+    depends_on: [fabric-prod, chroma]
+    volumes:
+      - ./var/lib/aiutopia:/var/lib/aiutopia
+      - ./goal_templates:/var/lib/aiutopia/goal_templates:ro
+    environment:
+      - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_key
+      - PY4J_HOST=fabric-prod
+      - PY4J_PORT=25100
+      - CHROMA_URL=http://chroma:8000
+      - LLM_MODEL=claude-haiku
+      - LLM_BUDGET_HARD_CAP_USD_MONTH=80
+      - QWEN_LOCAL_URL=http://planner-llm-local:8001
+    secrets: [anthropic_key]
+    restart: unless-stopped
+
+  planner-llm-local:
+    image: aiutopia/llm-local:qwen14b-int4
+    cpuset: "14"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ports:
+      - "127.0.0.1:8001:8001"
+    profiles: [llm-fallback]
+
+  chroma:
+    image: chromadb/chroma:0.5.20
+    cpuset: "15"
+    mem_limit: 2g
+    volumes:
+      - ./var/lib/aiutopia/chroma:/chroma/chroma
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  dashboard-feed:
+    image: aiutopia/dashboard-feed:latest
+    cpuset: "15"
+    mem_limit: 512m
+    volumes:
+      - ./var/lib/aiutopia:/var/lib/aiutopia:ro
+    ports:
+      - "127.0.0.1:8080:8080"                  # localhost only — NEVER expose
+
+secrets:
+  anthropic_key:
+    file: ./secrets/anthropic_key

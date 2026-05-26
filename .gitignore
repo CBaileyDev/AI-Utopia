@@ -28,3 +28,8 @@ var/
 runs/
 *.ckpt
 *.pt
+
+# Secrets (allowlist README + .gitkeep)
+secrets/*
+!secrets/.gitkeep
+!secrets/README.md
