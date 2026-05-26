@@ -32,10 +32,23 @@ class FabricBridge:
         self.entry_point = self.gw.entry_point
 
     def close(self) -> None:
-        """Mandatory — see module docstring."""
+        """Close the client-side connection only — do NOT shut down the
+        server-side gateway.
+
+        `JavaGateway.shutdown()` tells the Java side to stop the entire
+        `GatewayServer`, killing the Py4J listener for every other client.
+        That is catastrophic when multiple env workers share one Fabric
+        server (M6 production layout). `JavaGateway.close()` closes only
+        this Python process's socket; the Java gateway keeps listening
+        for other clients.
+
+        Mandatory close (PettingZoo lifecycle): without it, Ray worker
+        shutdown leaks the open socket and accumulates half-open
+        connections on the Java side.
+        """
         if self.gw is not None:
             try:
-                self.gw.shutdown()
+                self.gw.close()
             finally:
                 self.gw = None
                 self.entry_point = None
