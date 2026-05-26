@@ -44,17 +44,19 @@ public class WorldOps {
             );
             dev.aiutopia.mod.agent.AgentRegistry.registerAgent(playerName);
 
+            // NOTE: Carpet 1.4.147 (MC 1.21.1) does not expose a /player <name>
+            // loadProfile <skin> subcommand. The fake player's skin is derived
+            // from Mojang's account lookup for `playerName` itself when the
+            // server is in online-mode. In offline-mode (our smoke setup) the
+            // skin shows as default Steve/Alex. M5+ may revisit by switching
+            // to a custom entity type with explicit GameProfile assignment.
+            // The `skin` parameter is currently ignored on the Carpet path;
+            // kept in the method signature for forward compatibility.
             if (skin != null && !skin.isEmpty()) {
-                try {
-                    cm.executeWithPrefix(
-                        server.getCommandSource(),
-                        "/player " + playerName + " loadProfile " + skin
-                    );
-                } catch (Exception skinErr) {
-                    dev.aiutopia.mod.AiUtopiaMod.LOG.warn(
-                        "loadProfile {} failed for {}: {} — using default skin",
-                        skin, playerName, skinErr.getMessage());
-                }
+                dev.aiutopia.mod.AiUtopiaMod.LOG.debug(
+                    "skin '{}' ignored (Carpet 1.4.x has no loadProfile); "
+                    + "use online-mode + matching MC account for skin",
+                    skin);
             }
             return true;
         } catch (Exception e) {

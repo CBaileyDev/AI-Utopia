@@ -77,7 +77,8 @@ def spawn(
         if not ok:
             typer.echo(f"ERROR: Carpet /player {chosen_name} spawn failed", err=True)
             raise typer.Exit(code=2)
-        typer.echo(f"carpet: /player {chosen_name} spawn (skin={skin}) → ok")
+        # Plain ASCII arrow — Windows cp1252 console can't encode U+2192.
+        typer.echo(f"carpet: /player {chosen_name} spawn (skin={skin}) -> ok")
 
 
 @app.command("kill")
