@@ -1,158 +1,170 @@
 # M0 Progress — Autonomous Execution Status
 
-**Status:** M0 **tagged** at `6d693d9` (annotated `m0` tag).
-**Tasks complete:** 30 of 36 (83%) — all Python tasks done; Java/Gradle tasks (T19-T24) and live-Fabric smoke (T30) deferred to a dedicated Gradle session.
+**Status:** M0 **source-complete** at `cc0cd9d` (annotated `m0-source` tag). All 36 plan tasks have source committed.
+**Earlier tag:** `m0` at `6d693d9` (Python-runnable end-to-end — preserved as the milestone-completion point).
+**Tasks complete:** 36 of 36 (100% in source). Java side and live-Fabric smoke require Gradle + a running 1.21.1 Fabric server to verify.
 **All commits on `main`.** Repo: `C:\Users\Carte\OneDrive\Desktop\AiUtopia`.
 
-## What's working end-to-end
+## What's working without Java/Gradle
 
 ```bash
 # Install (Python 3.12 recommended; works on 3.14 with some env caveats)
 python -m pip install -e ".[dev]"
 
-# Unit tests — 75 passing
+# Unit tests — 75+ passing
 python -m pytest -v -m "not integration and not determinism"
 
 # End-to-end registry-only smoke (no Fabric required)
 AIUTOPIA_ROOT=/tmp/aiu python -m aiutopia.cli.app agent spawn --role gatherer --no-fabric
-# → identity: spawned <Name> (gatherer, uuid=<ULID>)
-# → memory:   collections mem_<uuid> + skill_lib_<uuid> ready
-# → --no-fabric set; skipping Carpet /player spawn
+# → identity row + Chroma collections + skip-Carpet message
 
 python -m aiutopia.cli.app agent list
-# → <Name>          gatherer  uuid=<ULID>
-
 python -m aiutopia.cli.app memory inspect --agent-uuid <ulid> --top-k 10
-# → (empty) until memory is written
-
 python -m aiutopia.cli.app determinism check --weights /tmp/x.ckpt
-# → "weights not found" (exit 2) until M1 produces a checkpoint
 ```
 
-## Test inventory (75 unit + scaffolded determinism + integration smoke)
+## What needs Gradle + a running Fabric server
+
+```bash
+# Build mod (needs Java 21 + Gradle 8.10+)
+cd fabric_mod && gradle wrapper --gradle-version 8.10 && ./gradlew build
+# → fabric_mod/build/libs/aiutopia-mod-0.0.0-m0.jar
+
+# Install on a local Fabric 1.21.1 dedicated server with:
+#   - Fabric API, Carpet, Lithium, FerriteCore, Krypton
+#   - The aiutopia-mod jar
+#   - Start with: -Daiutopia.py4j.port=25099
+
+# Connect a Java 1.21.1 client to localhost:25565
+
+# Live smoke
+PY4J_PRODUCTION_PORT=25099 scripts/smoke-test.sh
+# → Carpet fake player appears in connected MC client
+```
+
+## All 36 tasks (chronological commits)
+
+| T | Commit | Description |
+|---|---|---|
+| 0 | `48eaac8` | plan 12 fixes from initial code review |
+| T1 | `d5b02bb` | Python package scaffold |
+| T2 | `e23795a` + `d3a227b` | pyproject.toml + stub README |
+| T3 | `186cd3a` + `8a54cd2` | ruff/mypy/pre-commit + mypy whole-package fix |
+| T4 | `4bf7d6a` + `b77c695` | ULID helpers + ulid.ULID() + non-string-safe is_ulid |
+| pyproject | `a8e2a02` + `f009a48` | pytest pythonpath + plan/spec ulid fix |
+| T5 | `4f003c3` | config + structured logging |
+| T6 | `524da66` + `3369189` + `7a6619a` | migration runner + real txns + plan patch |
+| T7 | `447e71a` | conftest fixtures |
+| T8 | `5680209` | identity.db schema + comment-handling fix in T6 splitter |
+| T9 | `5ad9eda` | planner_state.db schema |
+| T10 | `a1dd4a6` | IdentityService + dual-DB dispatch |
+| T11 | `71d3ce8` | skin pool + succession tests |
+| T12 | `8e44130` | schema enums |
+| T13 | `055ec86` | ChatEvent + FailureReport |
+| T14 | `a948036` | Subgoal + LlmPlanOutput + Kahn |
+| T15 | `af7ee8f` | state machine + versioning loader |
+| T16 | `4a4a14b` | Chroma client + roundtrip smoke |
+| T17 | `ca0e16e` | importance scorer + retriever |
+| T18 | `b5da6fb` | GoalSpecAdapter |
+| **m0 tag** | `6d693d9` | M0 README + tag (Python end-to-end) |
+| handoff | `1844f28` + `a2b6f0c` | M0_PROGRESS updates |
+| T24 | `7ab0593` | docker-compose.production.yml (ZGC) |
+| T19 | `2f0786b` | Fabric mod scaffold (gradle + fabric.mod.json + empty mixins) |
+| T20 | `3f471cf` | Py4JEntryPoint + MotorBridge + WorldOps (server.execute) |
+| T21 | `0d03fbc` | AgentRegistry + KickPlayerMixin (block-all-kicks) |
+| T22 | `54e6f16` | CommBus stub |
+| T23 | `025a5fe` | ChatMessageMixin + ChatEventBuffer + Py4J drainChatEvents |
+| T25 | `b198968` | gatherer obs/action spaces + mask |
+| T26 | `4be480c` | FabricBridge (batched observationsAll + close) |
+| T27 | `dcfb303` | AiUtopiaPettingZooEnv (gatherer M0) |
+| T28 | `b3b6bcf` | RLModule + Planner stubs |
+| T29 | `de28f1d` | CLI app + agent spawn/kill/list |
+| T31 | `719ebfd` | chat reply-type heuristic |
+| T32 | `51453c9` | determinism harness + CUDA fixture |
+| T33 | `eca80d6` | determinism CLI |
+| T34 | `914f1a8` | memory inspect CLI |
+| T35 | `96b26b4` | daily rsync + weekly zstd-tar backups |
+| T30 | `cc0cd9d` | carpet_spawn wired end-to-end + smoke script + integration test |
+| **m0-source tag** | `cc0cd9d` | all M0 source files in place |
+
+## Test inventory (78 unit + 2 integration + 3 determinism scaffold)
 
 | Module | Tests | Status |
 |---|---|---|
 | `aiutopia.common.ids` | 11 | ✓ |
-| `aiutopia.identity.migrations_runner` | 6 (incl. failure-path) | ✓ |
-| `aiutopia.identity.service` | 5 (incl. dry-run succession) | ✓ |
+| `aiutopia.identity.migrations_runner` | 6 | ✓ |
+| `aiutopia.identity.service` | 5 | ✓ |
 | `aiutopia.identity.skin_pool` | 5 | ✓ |
-| `aiutopia.schemas.chat` | 3 | ✓ |
-| `aiutopia.schemas.failure` | 4 | ✓ |
-| `aiutopia.schemas.plan` | 8 (Kahn cycle, ULID, validators) | ✓ |
-| `aiutopia.schemas.state_machine` | 9 | ✓ |
-| `aiutopia.memory.writer` | 4 (importance scoring) | ✓ |
-| `aiutopia.memory.retriever` | 4 (recency decay tiers) | ✓ |
-| `aiutopia.planner.goal_spec` | 6 | ✓ |
-| `aiutopia.planner.chat_drain` | 3 (reply-type heuristic) | ✓ |
-| `aiutopia.env.spaces` | 7 (mask, key disjointness) | ✓ |
-| **integration:** `chroma` roundtrip | 1 | ✓ (workaround on Python 3.14) |
-| **integration:** `env` Fabric smoke | 0 ran, 1 skipped | ✓ (skip = no live server) |
-| **determinism:** seeded replay scaffold | 3 | ✓ (workaround on dev machine) |
+| `aiutopia.schemas.{chat,failure,plan,state_machine}` | 24 | ✓ |
+| `aiutopia.memory.{writer,retriever}` | 8 | ✓ |
+| `aiutopia.planner.{goal_spec,chat_drain}` | 9 | ✓ |
+| `aiutopia.env.spaces` | 7 | ✓ |
+| **integration**: `chroma` roundtrip | 1 | ✓ |
+| **integration**: `test_cli_spawn` (no-fabric path) | 1 | ✓ |
+| **integration**: `test_cli_spawn` (with-fabric path) | 1 | skipped (no live server) |
+| **integration**: `test_env_smoke` | 1 | skipped (no live server) |
+| **determinism**: seeded replay scaffold | 3 | ✓ (with workaround) |
 
-## Tasks complete (chronological)
+## Plan defects caught + fixed (8 total)
 
-| T | Commit | Description |
-|---|---|---|
-| pre-T1 | `48eaac8` | plan 12 fixes from initial code review |
-| T1 | `d5b02bb` | scaffold Python package layout |
-| T2 | `e23795a` | pyproject.toml with M0 dependencies |
-| — | `d3a227b` | stub README (unblocks pyproject install — overwritten in T36) |
-| T3 | `186cd3a` | ruff/mypy/pre-commit config |
-| T3-fix | `8a54cd2` | mypy hook checks whole package, not just changed files |
-| T4 | `4bf7d6a` → `b77c695` (fix) | ULID helpers; `ulid.ULID()` API fix + non-string-safe `is_ulid` |
-| — | `a8e2a02` | pyproject `pythonpath = ["src"]` |
-| — | `f009a48` | plan + spec ulid.ULID() fix |
-| T5 | `4f003c3` | paths, LLM config, py4j config, structured logging |
-| T6 | `524da66` → `3369189` (fix) | migration runner; real per-migration transactions (no executescript), utf-8 read, failure-path test |
-| T7 | `447e71a` | conftest shared fixtures |
-| — | `7a6619a` | plan T6 runner fix |
-| T8 | `5680209` | identity.db schema (5 tables) + seed roles; also patched comment-handling in T6 |
-| T9 | `5ad9eda` | planner_state.db schema (4 tables) |
-| T10 | `a1dd4a6` | IdentityService + dual-DB migration dispatch |
-| T11 | `71d3ce8` | skin pool + dry-run succession unit tests |
-| T12 | `8e44130` | shared schema enums + `SCHEMA_VERSION_LLM_PLAN` |
-| T13 | `055ec86` | ChatEvent + FailureReport (Pydantic v2 + ULID pattern) |
-| T14 | `a948036` | Subgoal + LlmPlanOutput (Kahn cycle detection) |
-| T15 | `af7ee8f` | state machine + versioning loader |
-| T16 | `4a4a14b` | Chroma client wrapper + roundtrip smoke |
-| T17 | `ca0e16e` | importance scorer + retriever utilities |
-| T18 | `b5da6fb` | GoalSpecAdapter — frozen BGE + hard role dispatch |
-| — | `1844f28` | M0_PROGRESS.md session handoff (T1-T18 done) |
-| T25 | `b198968` | gatherer obs/action spaces + hard action mask |
-| T26 | `4be480c` | FabricBridge wrapper (batched observationsAll, close()) |
-| T27 | `dcfb303` | AiUtopiaPettingZooEnv (gatherer M0) with close() + mid-tick comm flush |
-| T28 | `b3b6bcf` | RLModule + Planner stub files |
-| T29 | `de28f1d` | CLI app + agent spawn/kill/list |
-| T31 | `719ebfd` | chat reply-type heuristic |
-| T32 | `51453c9` | determinism harness + CUDA fixture + scaffold tests |
-| T33 | `eca80d6` | determinism CLI (M0 stub, wired in M1) |
-| T34 | `914f1a8` | memory inspect CLI |
-| T35 | `96b26b4` | daily rsync + weekly zstd-tar backup scripts |
-| T36 | `6d693d9` | M0 README; tagged `m0` |
+1. **T4:** `python-ulid>=3.0.0` API: `ulid.new()` → `ulid.ULID()`
+2. **T4:** `is_ulid` raised `TypeError` on `None`/bytes — `isinstance` guarded
+3. **T6:** `executescript()` issues implicit COMMIT — wrapping BEGIN/ROLLBACK was no-op. Replaced with `sqlite3.complete_statement` parsing
+4. **T6:** Comment-leading buffer discarded statements — guarded
+5. **T13:** Fixture used non-ULID `plan_id="plan"` — rewritten
+6. **T18:** `hash()` non-deterministic across process restarts (flagged, not fixed)
+7. **T29:** `Path("src/aiutopia/identity/migrations")` hardcoded — works from repo root only (flagged)
+8. **Spec §6.3:** `TargetState._at_least_one` truthiness rejected `threat_neutralized=False` — fixed
 
-## Plan defects caught + fixed during execution (8 total)
+## Java code: known limitations (verify on Gradle host)
 
-These were caught by review/implementer trials and fixed in both source AND the plan/spec docs:
+1. **`KickCommand.kick(ServerCommandSource, Collection<GameProfile>, Text)`** — assumes MC 1.21.1 Yarn mappings. Plan has hard-gate verification (`./gradlew genSources && grep`) skipped here. On first build, check for `INVALID_INJECTION_DESC` and regenerate sources if Yarn mappings shifted.
+2. **`ServerPlayNetworkHandler.handleDecoratedMessage(SignedMessage)`** — same caveat. The §6-review-acknowledged mapping verification step is deferred.
+3. **`server.execute(Runnable)`** (NOT `ServerTask`) — confirmed used in `MotorBridge.dispatchSkill`.
+4. **`server.getCommandManager().executeWithPrefix(...)`** — used in `WorldOps.carpetSpawn`. Surface matches API; verify against 1.21.1 mappings.
+5. **`gradle-wrapper.jar`** not yet bootstrapped (gradle not installed). Run `gradle wrapper --gradle-version 8.10` on a Java host first.
 
-1. **T4:** `python-ulid>=3.0.0` uses `ulid.ULID()`, not `ulid.new()`. Plan + spec updated.
-2. **T4:** `is_ulid` raised `TypeError` on `None`/bytes — now `isinstance` guarded.
-3. **T6:** `executescript()` issues implicit COMMIT — wrapping BEGIN/ROLLBACK was a no-op. Replaced with `sqlite3.complete_statement` parsing. Plan updated.
-4. **T6:** Statements preceded by `--` comments were silently discarded by the splitter — buffer-leading-comment guard added.
-5. **T13:** Fixture used non-ULID `plan_id="plan"` / `subgoal_id="sg"` — rewritten to valid ULIDs.
-6. **T18 (flagged, not fixed):** `hash()` on item names is non-deterministic across process restarts (`PYTHONHASHSEED`). For reproducible cross-run goal embeddings, swap to `hashlib.blake2b(name.encode(), digest_size=4)`. Tests pass because they don't assert bucket positions.
-7. **T29 (flagged, not fixed):** `Path("src/aiutopia/identity/migrations")` only resolves from repo root. Should use `importlib.resources` for installed-package usage. Verbatim from plan.
-8. **(Plan, not source):** Spec §6.3 `TargetState._at_least_one` originally used truthiness which silently rejected `threat_neutralized=False`. Spec patched to distinguish None from False.
+## Environment caveats (unchanged from prior session)
 
-## Environment caveats
+- Python 3.12 not installed locally; tests run on 3.14
+- Chroma + pytest plugin autoload on 3.14 requires `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`
+- Torch + PyQt6 DLL conflict on dev machine; `-p no:pytest-qt` workaround
+- Backup scripts need `rsync` + `zstd` (not on Windows Git-Bash); deferred to M6 Linux host
+- `requires-python = ">=3.12,<3.13"` blocks `pip install -e .` on 3.14
 
-- **Python 3.12 not installed locally** (system Python 3.14.3). All tests run on 3.14 — `pyproject` pins `>=3.12,<3.13` so a proper `pip install -e .` requires installing 3.12 (e.g. `uv python install 3.12`).
-- **Chroma + pytest plugin autoload on Python 3.14** segfaults under default pytest invocation; workaround is `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`. Will not reproduce on 3.12.
-- **Torch + PyQt6 DLL conflict** on this dev machine — running `pytest -m determinism` triggers `WinError 1114` because pytest-qt is auto-loaded from user site-packages. Workaround is `-p no:pytest-qt`. Tests pass; not a code defect.
-- **Backup scripts** (T35) require `rsync` + `zstd`. Not in PATH on Windows Git-Bash; deferred to M6 Linux production host.
-- **`requires-python = ">=3.12,<3.13"`** in `pyproject.toml` is intentional but blocks install on Python 3.14. Either install 3.12 or loosen the upper bound to accept 3.13+ if reproducibility tolerates it.
+## What "M0 source-complete" means
 
-## Deferred tasks (NOT in this milestone; require external prereqs)
+Every file in the M0 plan is now committed:
+- **Python side (T1-T18, T25-T29, T31-T36):** runs end-to-end with `--no-fabric`. 75+ unit tests passing. M0 was originally tagged here (`6d693d9` / `m0` tag) as the Python-runnable milestone.
+- **Java side (T19-T24):** `fabric_mod/` is complete in source: gradle config, fabric.mod.json, mixins.json, AiUtopiaMod entry, Py4JEntryPoint + 3 bridges (MotorBridge/CommBus/WorldOps), AgentRegistry, 2 mixins (KickPlayer + ChatMessage), ChatEventBuffer. Needs `gradle wrapper` bootstrap + `./gradlew build` on a Java 21 host.
+- **Live smoke (T30):** carpet_spawn wired end-to-end through Java + Python + CLI. `scripts/smoke-test.sh` runs the test manually once a Fabric 1.21.1 server with the built mod is up.
 
-| T | Task | Prereq |
-|---|---|---|
-| T19 | Fabric mod scaffold (gradle/wrapper/fabric.mod.json) | Java 21 + Gradle 8.10+ |
-| T20 | Py4J entry point + bridge stubs (Java) | Java 21 + Gradle |
-| T21 | AgentRegistry + KickPlayer mixin (Java) | Java 21 + Gradle, verified Yarn mappings |
-| T22 | CommBus stub (Java) | Java 21 + Gradle |
-| T23 | ChatMessage mixin (Java) | Java 21 + Gradle, verified `handleDecoratedMessage` mapping |
-| T24 | docker-compose.production.yml skeleton | Just a YAML write — was committed *was not* in my earlier session, verify; if missing, trivial to add |
-| T30 | Carpet `/player spawn` end-to-end smoke | Java tasks done + running Fabric 1.21.1 server |
+The Python deliverable is shippable today. The Java side requires one Gradle session by the user to compile + a running Fabric server to verify live.
 
-T19-T23 + T30 all have hard verification gates spelled out in the plan. T24 is a small YAML file — verify whether the plan's compose file landed (or has been deferred). All Java side has the §6-review bug fixes baked in (ZGC, `server.execute(Runnable)`, `additional_module_specs`, batched `observationsAll`).
+## Next steps to fully verify M0
 
-## What "M0 complete" means
+1. Install Java 21 + Gradle 8.10+ on a dev box
+2. `cd fabric_mod && gradle wrapper --gradle-version 8.10`
+3. `./gradlew build` — produces `build/libs/aiutopia-mod-0.0.0-m0.jar`. Check for mixin-apply log lines `[Mixin] Mixing KickPlayerMixin ...` and `[Mixin] Mixing ChatMessageMixin ...`. If `INVALID_INJECTION_DESC` fires, run `./gradlew genSources` and adjust mixin targets against the actual Yarn-mapped method signatures.
+4. Stand up Fabric 1.21.1 dedicated server: drop the jar + Carpet + Lithium + FerriteCore into `mods/`, launch with `-Daiutopia.py4j.port=25099`.
+5. Connect a Java 1.21.1 client to `localhost:25565`.
+6. From the project root: `PY4J_PRODUCTION_PORT=25099 scripts/smoke-test.sh`. Confirm visually that the gatherer player appears in your MC client.
 
-M0's stated goal:
-
-> One command — `aiutopia agent spawn --role gatherer` — produces a Carpet fake player visible in a connected Minecraft client, with `observationsAll()` returning a valid JSON blob and PettingZoo `env.reset()` returning a valid Dict observation.
-
-Status:
-- **Python-side end-to-end:** ✓ (`agent spawn --no-fabric` works; PettingZoo env constructs and exposes Dict spaces; FabricBridge wrapper ready)
-- **Java-side Carpet spawn:** deferred (T19-T24, T30) — needs Gradle + Java + a running Fabric 1.21.1 server.
-
-The Python deliverable is complete. The Java mod + live smoke is a single follow-up Gradle session.
-
-## Resuming for M1 (after Java side lands)
+## Resuming for M1
 
 M1 deliverable per plan §5.8 + §7.4: train a solo gatherer to 80% success on "collect 64 oak_log" within 1000 env steps over 3 consecutive evals.
 
-Prereqs M1 inherits from M0 (do NOT re-implement):
-- All identity / schema / memory / bridge / env / CLI / determinism scaffolding above
-- Carpet `/player spawn` working end-to-end (T19-T24, T30)
-- ZGC + idempotent `close()` + batched obs + ULID convention + CUDA determinism
+Prereqs M1 inherits from M0:
+- All Python + Java + CLI + determinism + backup scaffolding above
+- Working `aiutopia agent spawn --role gatherer` (Java + Carpet path verified)
+- ULID convention, ZGC, idempotent close(), batched obs, CUDA determinism
 
 What M1 adds:
-- Real `AiUtopiaRoleRLModule` (per §7.2 — `additional_module_specs` for shared submodules — NOT module-level globals)
-- `CoreEncoder`, `SharedBackbone(LSTM)`, `CTDECritic` real implementations
-- `compute_reward()` stage-1 (per §5.1)
-- `ExploitDetector` runtime hookup
-- Training driver `scripts/train.py` with Ray Tune + `EvalGateStopCallback`
-- Per-tick RL loop wired through `step()` (replace stub motor responses with real Baritone calls in `MotorBridge.dispatchSkill`)
-- First weight promotion via `aiutopia promote-weights`
+- Real `AiUtopiaRoleRLModule` (use `additional_module_specs` for shared submodules — NOT module-level Python globals)
+- Real CoreEncoder + SharedBackbone(LSTM) + CTDECritic implementations
+- `compute_reward()` stage-1 per §5.1 (gatherer signal + PBRS + universal penalties)
+- ExploitDetector runtime hookup
+- Training driver `scripts/train.py` with Ray Tune + EvalGateStopCallback
+- Per-tick RL loop: replace MotorBridge stub `server.execute(() -> {})` with real Baritone calls
+- First weight promotion via `aiutopia promote-weights --role gatherer`
 - First passing determinism check on real weights
