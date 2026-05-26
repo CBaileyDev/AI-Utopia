@@ -60,4 +60,9 @@ public class Py4JEntryPoint {
     public java.util.List<String> advanceTickAwaitEvents(long timeoutMs) {
         return motor.advanceTickAwaitEvents(timeoutMs);
     }
+
+    /** Drain queued ChatEvents. Called from Python planner each tick. */
+    public java.util.List<String> drainChatEvents() {
+        return dev.aiutopia.mod.chat.ChatEventBuffer.drainAll();
+    }
 }

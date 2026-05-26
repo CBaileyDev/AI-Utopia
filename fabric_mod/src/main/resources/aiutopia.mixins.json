@@ -5,7 +5,7 @@
   "compatibilityLevel": "JAVA_21",
   "mixins": [],
   "client": [],
-  "server": ["KickPlayerMixin"],
+  "server": ["KickPlayerMixin", "ChatMessageMixin"],
   "injectors": {
     "defaultRequire": 1
   }
