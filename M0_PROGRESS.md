@@ -1,9 +1,46 @@
 # M0 Progress — Autonomous Execution Status
 
-**Status:** M0 **source-complete** at `cc0cd9d` (annotated `m0-source` tag). All 36 plan tasks have source committed.
-**Earlier tag:** `m0` at `6d693d9` (Python-runnable end-to-end — preserved as the milestone-completion point).
-**Tasks complete:** 36 of 36 (100% in source). Java side and live-Fabric smoke require Gradle + a running 1.21.1 Fabric server to verify.
+**Status: M0 FULLY VERIFIED.**
+- `m0-verified` tag at `ec5a66d` — JDK 21 installed, Fabric mod compiles green, Carpet fake player `Eirik` actually joined the game at (64, 71, -48) on a live MC 1.21.1 Fabric server.
+- `m0-source` tag at `cc0cd9d` — all 36 task source files committed.
+- `m0` tag at `6d693d9` — Python end-to-end (`--no-fabric` path).
+
 **All commits on `main`.** Repo: `C:\Users\Carte\OneDrive\Desktop\AiUtopia`.
+
+## Live smoke proof (from this session)
+
+```
+> aiutopia agent spawn --role gatherer --py4j-port 25099
+identity: spawned Eirik (gatherer, uuid=01KSJXWSEXTBBDBQ7ZABAW5SXJ)
+memory:   collections mem_01KSJXWSEXTBBDBQ7ZABAW5SXJ + skill_lib_01KSJXWSEXTBBDBQ7ZABAW5SXJ ready
+carpet: /player Eirik spawn (skin=Ingrid) -> ok
+
+# server log:
+[Server thread/INFO]: AI Utopia Py4J gateway listening on port 25099
+[Server thread/INFO]: Done (0.803s)! For help, type "help"
+[Server thread/INFO]: Eirik[local] logged in with entity id 1 at (64.0, 71.0, -48.0)
+[Server thread/INFO]: Eirik joined the game
+```
+
+## Real bugs caught + fixed during live verification (Java/build/smoke)
+
+| # | Location | Bug | Fix |
+|---|---|---|---|
+| 9 | `fabric_mod/build.gradle` | Carpet `:deobf` classifier doesn't resolve on `masa.dy.fi/maven` | Dropped Carpet compile dep (our Java drives Carpet via runtime command strings, no compile-time API needed) |
+| 10 | `WorldOps.carpetSpawn` | Assumed `CommandManager.executeWithPrefix()` returns `int`; actual return type in 1.21.1 is `void` | Removed return-value check; trust no-exception = success |
+| 11 | `KickPlayerMixin` | Plan §6-review claimed signature `kick(Collection<GameProfile>, Text)` — **wrong for 1.21.1 Yarn**; actual is `execute(ServerCommandSource, Collection<ServerPlayerEntity>, Text)` verified via `javap -p -c minecraft-unpicked.jar KickCommand` | Mixin reverted to original `execute` / `Collection<ServerPlayerEntity>` |
+| 12 | `WorldOps.carpetSpawn` skin branch | Called `/player <name> loadProfile <skin>` which doesn't exist in Carpet 1.4.147 | No-op'd with debug log; skin set implicitly via Mojang lookup on `playerName` in online-mode |
+| 13 | `src/aiutopia/env/bridge.py` | `JavaGateway(GatewayParameters(...))` passes params as positional `gateway_client`, crashing later with `'GatewayParameters' object has no attribute 'send_command'` | Use `gateway_parameters=` kwarg |
+| 14 | `src/aiutopia/cli/agent.py` | Output used U+2192 `→` which Windows cp1252 console can't encode | Replaced with ASCII `->` |
+
+## What ran in this verify session (all 6 steps PASS)
+
+1. **JDK 21 install** — Microsoft.OpenJDK 21.0.11+10 portable zip extracted to `/c/Users/Carte/jdk/jdk-21.0.11+10/` (winget install hung waiting for UAC; switched to portable zip — no admin needed).
+2. **gradle wrapper bootstrap** — Gradle 8.10 standalone downloaded to `/c/tmp/gradle-bootstrap`, used to run `gradle wrapper --gradle-version 8.10` in `fabric_mod/`. Wrapper files (`gradlew`, `gradlew.bat`, `gradle/wrapper/*`) committed.
+3. **./gradlew build** — `BUILD SUCCESSFUL in 10s` after the 3 build-side fixes (#9-#11). Output: `fabric_mod/build/libs/aiutopia-mod-0.0.0-m0.jar` (131 KB, 10 classes + manifest).
+4. **Server setup** — `server-runtime/` (gitignored) contains: `fabric-server-launcher.jar` (Fabric 0.16.5 + MC 1.21.1), `mods/{aiutopia-mod, fabric-api 0.116.12, fabric-carpet 1.4.147+v240613, lithium 0.15.3, ferritecore 7.0.3}`, `eula.txt=true`, server-rewritten `server.properties` (online-mode=false, port 25565). Server boots in ~3s on cold start, ~0.8s warm.
+5. **Client connection (manual)** — connect a 1.21.1 Java client to `localhost:25565`. **Pending: user-side**.
+6. **Smoke test** — `aiutopia agent spawn --role gatherer --py4j-port 25099` produces a Carpet fake player. Verified twice (first with Gunnar, then clean with Eirik after fixes #12-14). Both joined the server.
 
 ## What's working without Java/Gradle
 
