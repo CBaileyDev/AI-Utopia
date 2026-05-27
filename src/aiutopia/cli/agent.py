@@ -98,3 +98,43 @@ def list_agents() -> None:
     svc = IdentityService(paths.identity_db)
     for a in svc.list_living_agents():
         typer.echo(f"  {a.agent_name:16} {a.role_id:9} uuid={a.agent_uuid}")
+
+
+@app.command("drive")
+def drive(
+    agent_name:  str       = typer.Option(..., help="agent name to drive"),
+    skill:       int       = typer.Option(..., help="skill_type index (0=NAVIGATE,1=HARVEST,2=DEPOSIT_CHEST,3=SEARCH,4=WAIT,5=NOOP_BROADCAST)"),
+    target:      int       = typer.Option(0,   help="target_class index"),
+    dx:          float     = typer.Option(0.0, help="spatial param x in [-1,1]"),
+    dy:          float     = typer.Option(0.0),
+    dz:          float     = typer.Option(0.0),
+    scalar:      float     = typer.Option(0.5, help="scalar_param in [0,1]"),
+    py4j_port:   int       = typer.Option(25099, help="Py4J port"),
+    timeout_ms:  int       = typer.Option(60_000, help="wait this long for completion"),
+) -> None:
+    """Manually dispatch a single skill to an agent and wait for completion.
+
+    M1-Pipeline manual smoke tool — used to verify motor + obs + reward path
+    without a trained RL policy. Plan B's training driver replaces this."""
+    from aiutopia.env.bridge import FabricBridge
+    import time, json as _json
+    action = {
+        "skill_type":       skill,
+        "target_class":     target,
+        "spatial_param":    [dx, dy, dz],
+        "scalar_param":     [scalar],
+        "comm_payload":     [0.0] * 128,
+        "should_broadcast": 0,
+        "comm_target_mask": [0, 0, 0, 0],
+    }
+    invocation_id = f"manual-{int(time.time()*1000)}"
+    with FabricBridge(port=py4j_port) as bridge:
+        bridge.dispatch_skill(agent_name, action, invocation_id)
+        typer.echo(f"dispatched skill={skill} target={target} → {invocation_id}")
+        # Block on completion
+        events = bridge.advance_tick_await_events(timeout_ms=timeout_ms)
+        if not events:
+            typer.echo("timeout — no completion event arrived", err=True)
+            raise typer.Exit(code=1)
+        for evt in events:
+            typer.echo(_json.dumps(evt, indent=2))
