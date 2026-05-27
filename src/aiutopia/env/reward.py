@@ -107,3 +107,91 @@ def tech_tree_potential(inventory: dict[str, int], role: str) -> float:
         cap = caps.get(item, default_cap)
         total += min(qty, cap) * LOG_VALUE[item]
     return total
+
+
+# ---------------------------------------------------------------------
+# Stage-1 reward composition (§5.1 + §5.2 stage-1 branch only).
+# Stages 2 + 3 (multi-objective + scarcity-weighted) are M2-M5 work.
+# ---------------------------------------------------------------------
+
+GAMMA          = 0.99    # PBRS discount
+DEATH_PENALTY  = 10.0
+TIME_PENALTY   = 0.001
+GAMMA_CLIP     = 0.05    # per axis (§5.5)
+
+
+def _delta_inventory(prev: dict[str, int], curr: dict[str, int]) -> dict[str, int]:
+    """Positive: item gained. Negative: item lost. Ignores zero deltas."""
+    keys = set(prev) | set(curr)
+    return {k: curr.get(k, 0) - prev.get(k, 0)
+            for k in keys
+            if curr.get(k, 0) - prev.get(k, 0) != 0}
+
+
+def _inventory_from_obs(obs: dict) -> dict[str, int]:
+    """Reconstruct {item_id: count} dict from the obs slot arrays."""
+    items = obs.get("inv_slot_item_ids", [])
+    counts = obs.get("inv_slot_counts", [])
+    out: dict[str, int] = {}
+    for item, count in zip(items, counts):
+        if not item or count <= 0:
+            continue
+        # Strip "minecraft:" prefix if present
+        key = item.split(":", 1)[-1]
+        out[key] = out.get(key, 0) + count
+    return out
+
+
+def _gatherer_primary_signal(prev_inv: dict[str, int],
+                              curr_inv: dict[str, int]) -> float:
+    """§5.4 — `Σ_r delta_inv[r] * potential[r]` (VPT-normalized).
+
+    Uses LOG_VALUE directly (not the capped potential) so each block
+    chopped gives the same reward, regardless of how much the agent
+    has already hoarded. Capping is the PBRS potential's job (anti-
+    hoarding pressure)."""
+    delta = _delta_inventory(prev_inv, curr_inv)
+    return sum(delta.get(item, 0) * value for item, value in LOG_VALUE.items())
+
+
+def compute_reward_stage_1(*,
+                            role: str,
+                            obs_prev: dict,
+                            obs_curr: dict,
+                            action: dict,
+                            env_meta: dict) -> float:
+    """§5.1 stage-1 reward composition for solo per-role pretraining.
+
+        r_stage_1 = r_primary + r_pbrs - r_death - r_time - r_exploits - r_clip
+
+    Args:
+      role: must match a RoleId.
+      obs_prev / obs_curr: dicts with inv_slot_item_ids + inv_slot_counts.
+      action: contains skill_type at minimum.
+      env_meta: dict with keys:
+        - died_this_tick: bool
+        - n_clipped_param_axes: int (0..4)
+        - exploit_penalties: list[(name, positive_penalty_value)]
+
+    Returns the scalar reward for this tick.
+    """
+    prev_inv = _inventory_from_obs(obs_prev)
+    curr_inv = _inventory_from_obs(obs_curr)
+
+    # M1-Pipeline only ships gatherer primary signal. Other roles get 0
+    # until M2-M4 add their primary signals.
+    if role == "gatherer":
+        r_primary = _gatherer_primary_signal(prev_inv, curr_inv)
+    else:
+        r_primary = 0.0
+
+    phi_prev = tech_tree_potential(prev_inv, role)
+    phi_curr = tech_tree_potential(curr_inv, role)
+    r_pbrs   = GAMMA * phi_curr - phi_prev
+
+    r_death  = DEATH_PENALTY if env_meta.get("died_this_tick", False) else 0.0
+    r_time   = TIME_PENALTY
+    r_clip   = GAMMA_CLIP * int(env_meta.get("n_clipped_param_axes", 0))
+    r_exploits = sum(p for _, p in env_meta.get("exploit_penalties", []))
+
+    return r_primary + r_pbrs - r_death - r_time - r_exploits - r_clip
