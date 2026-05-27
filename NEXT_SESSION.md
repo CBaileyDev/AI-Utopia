@@ -1,10 +1,71 @@
 # Next session runbook — M1B training to `m1b-verified` tag
 
-**Resume point:** repo HEAD `e979748`. M1B code-complete + 10 integration fixes + 3 "likely to break" preemptive fixes + 2 pre-N3 safety fixes (per-worker AIUTOPIA_ROOT, /clear race fix). 142/142 unit tests pass. `aiutopia-mod-0.0.0-m1b.jar` deployed to 5 mod directories. No live processes — last session cleaned up.
+**Resume point:** repo HEAD `e466063`. M1B code-complete + **13** integration fixes (12 + slow-env timeout) + 3 "likely to break" preemptive + 2 pre-N3 safety + N9 (Java ItemId table) + N7.5 stop-key fix recipe. 142/142 unit tests pass. `aiutopia-mod-0.0.0-m1b.jar` deployed to 5 mod directories. No live processes — last session cleaned up.
 
 **Goal this session:** Run T21 to convergence, hit the 80% eval gate, promote weights, tag `m1b-verified`. Then optionally start M2 brainstorming.
 
 **Supervision mode:** USER BABYSITS the run (1-2 hours of TensorBoard watching, Ctrl-C on convergence). No custom auto-stopper installed; training will otherwise run to `training_iteration == 2000`. See N7.5 if you want to fix the Tune stop-key path for M2.
+
+---
+
+## ⚠️ N10 BLOCKER — known v13 hang to debug FIRST
+
+The last training attempt (v13) silently hung on the first `env.step()`. Symptoms:
+- Workers spawned cleanly
+- env.reset() executed (oak_logs placed at 16:18:27 across all 4 Fabric instances)
+- Then **complete silence** — no skill execution, no errors, no progress for 5+ minutes
+- Python worker CPU went idle (53s total across 26 procs)
+
+**Most likely cause:** The N9 obs builder refactor at commit `c79afc5` — `CoreObsBuilder.maskedItemId()` now delegates to the new `ItemIdTable.idOf()` singleton. Possible failure modes:
+1. `ItemIdTable` singleton init blocks indefinitely on first call from obs path
+2. `idOf()` throws on a specific item type silently swallowed by the obs builder
+3. The new mapping produces an obs the Python wrapper's `_decode_obs` can't parse
+
+**Debug recipe (do this BEFORE relaunching training):**
+
+```bash
+# 1. Launch ONE Fabric instance + one agent + try a single skill manually
+JDK_HOME=/c/Users/Carte/jdk/jdk-21.0.11+10 ./scripts/launch-training-instances.sh
+# (the script needs only 1 instance for the probe, but easier to launch all 4)
+```
+
+```powershell
+# 2. Probe: run a single HARVEST skill via the existing aiutopia agent drive CLI
+cd C:\Users\Carte\OneDrive\Desktop\AiUtopia
+$env:PYTHONPATH = "src"
+$env:AIUTOPIA_ROOT = "C:\tmp\aiu-n10-probe"
+py -3.11 -m aiutopia.cli.app agent spawn --role gatherer --py4j-port 25001
+py -3.11 -m aiutopia.cli.app agent drive --agent-name <NAME_FROM_SPAWN> `
+    --skill 1 --target 0 --dx 0.5 --dy 0.0 --dz 0.5 --scalar 0.5 `
+    --py4j-port 25001 --timeout-ms 30000
+```
+Expected: completion event JSON printed within ~5s. If hangs >30s: skill dispatch path is broken (probably ItemIdTable.init or the obs builder).
+
+```powershell
+# 3. If skill drive works manually, the issue is in the WRAPPER's env.step path.
+# Run the N2.5 reward sanity probe (same script from NEXT_SESSION.md Phase 2.5)
+# but watch which step it stalls on. The first call should be env.reset().
+```
+
+```powershell
+# 4. If both probes hang, the issue is in observationsAll() (the obs builder is
+# blocking). Inspect with:
+py -3.11 -c "from aiutopia.env.bridge import FabricBridge
+import time
+with FabricBridge(port=25001) as b:
+    t = time.time()
+    obs = b.observations_all()
+    print(f'observationsAll took {time.time()-t:.2f}s, keys={list(obs.keys())[:5]}')"
+# Expect: <1s. If >5s: ItemIdTable lookup is slow.
+```
+
+**Fix candidates (in priority order):**
+- Add debug log in `ItemIdTable.idOf()` to count calls + time
+- If `ItemIdTable` builds its mapping lazily on first call, switch to eager init at mod boot
+- If `idOf()` does a linear scan, add a HashMap cache
+- If the regression is real but unclear, `git revert c79afc5` and reintroduce N9 fix differently (keep the obs builder unchanged, just expose the existing table via Py4J)
+
+**Once N10 is fixed**, resume below from Phase 1.
 
 ---
 
