@@ -1,6 +1,14 @@
 # Next session runbook — M1B training to `m1b-verified` tag
 
-**Resume point:** repo HEAD `e466063`. M1B code-complete + **13** integration fixes (12 + slow-env timeout) + 3 "likely to break" preemptive + 2 pre-N3 safety + N9 (Java ItemId table) + N7.5 stop-key fix recipe. 142/142 unit tests pass. `aiutopia-mod-0.0.0-m1b.jar` deployed to 5 mod directories. No live processes — last session cleaned up.
+**Resume point:** repo HEAD `27ff6cd`. M1B code-complete + **16** integration fixes:
+- 13 from prior sessions
+- **N10** (#50): wrapper injects skill `timeout_ticks=400` (Java default of 6000 = 20s wall at tick warp 300 → workers timed out before any sample landed)
+- **N11** (#51): removed lithium mod from training instances (`ConcurrentModificationException` in Lithium's `forEachInBox` during Carpet fake player tick at tick warp 300)
+- **N12** (#52): dropped tick rate from 300 to 60 (Lithium-removed didn't fix it; vanilla MC's fastutil `LongOpenHashSet.rehash` ALSO crashes under tick warp 300 with Carpet fake players. 60 TPS = 3× vanilla, training-viable, no crashes observed in 4+ min runtime)
+
+142/142 unit tests pass. `aiutopia-mod-0.0.0-m1b.jar` is post-N12 rebuild, deployed to 5 mod dirs.
+
+**v16 may still be running** on PID 80302 (started 18:54). 4 Fabric instances on ports 25001-25004 / MC 25566-25569. Check with `Get-Process java,python | Where-Object { $_.Path -like '*Python311*' -or $_.ProcessName -eq 'java' }`. Let it cook overnight — at tick rate 60 each iter takes 10-15 min, gate convergence likely needs hundreds of iters.
 
 **Goal this session:** Run T21 to convergence, hit the 80% eval gate, promote weights, tag `m1b-verified`. Then optionally start M2 brainstorming.
 
