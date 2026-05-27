@@ -12,7 +12,10 @@ os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 import ray
 from ray import tune
 from ray.tune import RunConfig
-from ray.train import CheckpointConfig
+# Use ray.tune.CheckpointConfig — ray.train.CheckpointConfig deprecates
+# checkpoint_frequency/at_end, but Tune's internal trial machinery still
+# expects them as ints, leading to "int % str" crashes mid-iter.
+from ray.tune import CheckpointConfig
 
 from aiutopia.common.config import Paths
 from aiutopia.common.logging import setup_logging, get_logger
@@ -95,6 +98,8 @@ def main() -> None:
             storage_path=str(paths.runs_dir),
             checkpoint_config=CheckpointConfig(
                 num_to_keep=10,
+                checkpoint_frequency=50,
+                checkpoint_at_end=True,
                 checkpoint_score_attribute="env_runners/episode_return_mean",
                 checkpoint_score_order="max",
             ),
