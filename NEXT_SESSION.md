@@ -1,8 +1,10 @@
 # Next session runbook — M1B training to `m1b-verified` tag
 
-**Resume point:** repo HEAD `4ca6bd8`. M1B code-complete + 10 integration fixes applied + 3 "likely to break" pre-emptive fixes. 142/142 unit tests pass. `aiutopia-mod-0.0.0-m1b.jar` deployed to 5 mod directories. No live processes — last session cleaned up.
+**Resume point:** repo HEAD `e979748`. M1B code-complete + 10 integration fixes + 3 "likely to break" preemptive fixes + 2 pre-N3 safety fixes (per-worker AIUTOPIA_ROOT, /clear race fix). 142/142 unit tests pass. `aiutopia-mod-0.0.0-m1b.jar` deployed to 5 mod directories. No live processes — last session cleaned up.
 
 **Goal this session:** Run T21 to convergence, hit the 80% eval gate, promote weights, tag `m1b-verified`. Then optionally start M2 brainstorming.
+
+**Supervision mode:** USER BABYSITS the run (1-2 hours of TensorBoard watching, Ctrl-C on convergence). No custom auto-stopper installed; training will otherwise run to `training_iteration == 2000`. See N7.5 if you want to fix the Tune stop-key path for M2.
 
 ---
 
@@ -52,6 +54,58 @@ Expect: 4 lines, all `setup=True`.
 
 ---
 
+## Phase 2.5 — Reward sanity check (5 min) — Task N2.5
+
+Quick insurance before committing to a long training run. Drive one agent through a scripted skill sequence and verify the reward histogram is sane (non-zero variance, no NaN, magnitudes in `[-2, +5]` ballpark).
+
+```powershell
+cd C:\Users\Carte\OneDrive\Desktop\AiUtopia
+$env:PYTHONPATH = "src"
+$env:AIUTOPIA_ROOT = "C:\tmp\aiu-m1b-probe"
+py -3.11 -c @"
+import json, numpy as np
+from aiutopia.env.wrapper import AiUtopiaPettingZooEnv
+env = AiUtopiaPettingZooEnv({
+    'stage': 1, 'active_roles': ['gatherer'],
+    'seed_strategy': 'fixed_easy', 'py4j_ports': [25001],
+    'tick_warp': True, 'max_episode_ticks': 50,
+    'per_worker_seed_offset': False, 'enable_memory_writes': False,
+    'aiutopia_root_per_worker': False,
+})
+obs, info = env.reset(seed=1)
+rewards = []
+for tick in range(30):
+    actions = {}
+    for agent_id in obs:
+        a = env.action_space(agent_id).sample()
+        actions[agent_id] = a
+    obs, rew, term, trunc, info = env.step(actions)
+    for r in rew.values():
+        rewards.append(float(r))
+    if all(term.values()) or all(trunc.values()):
+        break
+env.close()
+r = np.asarray(rewards)
+print(f'reward stats: n={len(r)} mean={r.mean():.3f} std={r.std():.3f} min={r.min():.3f} max={r.max():.3f}')
+print(f'histogram (5 bins):')
+hist, edges = np.histogram(r, bins=5)
+for i, h in enumerate(hist):
+    print(f'  [{edges[i]:.2f}, {edges[i+1]:.2f}]: {"#"*h} ({h})')
+print('NaN check:', np.isnan(r).any())
+print('Inf check:', np.isinf(r).any())
+"@
+```
+
+**Pass criteria:**
+- `n == 30` (or close — episode terminations OK)
+- `std > 0` (not a constant signal)
+- `NaN check: False`, `Inf check: False`
+- `min >= -10` and `max <= +20` (sanity bounds)
+
+If any check fails, fix `compute_reward_stage_1` in `src/aiutopia/env/reward.py` before launching N3. A silent `0` mean+std with no NaN means the reward is computing but is constant — usually a sign the agent isn't actually triggering the events that produce reward (check that the obs delta logic in reward.py sees the obs changing tick-to-tick).
+
+---
+
 ## Phase 3 — Train (hours, mostly hands-off) — Task N3
 
 ```powershell
@@ -78,6 +132,32 @@ tensorboard --logdir C:\tmp\aiu-m1b-train\runs --port 6006
 - `iter rate >= 1/min` thereafter (each iter samples 4096 env steps across 4 workers at tick rate 300)
 - `episode_return_mean` is non-zero (positive **or** negative) by iter ~50
 - Fabric `instance-N.log` shows `Changed the block at` lines on each `env.reset()` — not "Could not set"
+
+**Verify the 4 per-review-fix invariants in the first 5 min:**
+
+```powershell
+# (1) Per-worker AIUTOPIA_ROOT actually created (4 separate dirs):
+Get-ChildItem C:\tmp\aiu-m1b-train_w* -Directory | Select-Object Name, LastWriteTime
+# Expect: aiu-m1b-train_w0, _w1, _w2, _w3 — each with its own identity.db
+Get-ChildItem C:\tmp\aiu-m1b-train_w0\identity.db -ErrorAction SilentlyContinue
+
+# (2) Checkpoints actually being written (cadence verification):
+Get-ChildItem "C:\tmp\aiu-m1b-train\runs\aiutopia_M1_seed1\PPO_*\checkpoint_*" -ErrorAction SilentlyContinue | Select-Object Name, LastWriteTime
+# Expect: at least one checkpoint_NNNNNN/ directory by ~iter 10. If nothing
+# appears past iter 50, Ray 2.55's default cadence may be "end only" —
+# pass --checkpoint-frequency to train.py or hack RunConfig.checkpoint_config.
+
+# (3) Custom metrics actually in TensorBoard:
+# Open http://localhost:6006/, expand "custom_metrics" scope —
+# should see gatherer_policy/entropy, gatherer_policy/vf_loss, M1/gate_history.
+# If the scope is empty, the RLlibCallback isn't piping to the new metrics_logger
+# in Ray 2.55 — see N7.5.
+
+# (4) /clear race fixed — Fabric instance-1.log should NOT have
+# "No player was found" lines after the initial spawn await:
+Select-String "No player was found" C:\Users\Carte\OneDrive\Desktop\AiUtopia\server-runtime\training\instance-1\instance-1.log | Measure-Object | Select-Object Count
+# Expect: 0 (or very few — at most one per worker on auto-spawn race)
+```
 
 **Stop criterion:** the configured Tune stop is `training_iteration == 2000`. The `EvalGateStopCallback` still writes `M1/gate_passed` into `result["custom_metrics"]` but Ray 2.55 doesn't pipe that to Tune's stop-dict key path (T21 fix #9). Either: (a) watch TensorBoard for `eval_m1_oak_log_success_rate >= 0.80` for 3 consecutive evals, then Ctrl-C, (b) let it run all 2000 iters and pick the best checkpoint at the end.
 
@@ -158,6 +238,39 @@ Expected tags: `m0`, `m0-source`, `m0-verified`, `m1a-verified`, `m1b-verified`.
 
 ---
 
+## Phase 6.5 — Resume training after a crash (5 min) — failure path
+
+If training dies mid-run (Ray worker OOM, machine reboot, Ctrl-C without convergence, electricity glitch), you can pick up from the last checkpoint instead of restarting from scratch.
+
+**Locate the last good checkpoint:**
+```powershell
+$LAST_CKPT = (Get-ChildItem "C:\tmp\aiu-m1b-train\runs\aiutopia_M1_seed1\PPO_*\checkpoint_*" `
+              -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+Write-Host "Resume from: $LAST_CKPT"
+```
+
+**Restore the Tuner and continue:**
+```powershell
+$env:AIUTOPIA_ROOT = "C:\tmp\aiu-m1b-train"; $env:PYTHONPATH = "src"
+$env:CUBLAS_WORKSPACE_CONFIG = ":4096:8"
+py -3.11 -c @"
+from ray import tune
+tuner = tune.Tuner.restore(
+    path=r'C:\tmp\aiu-m1b-train\runs\aiutopia_M1_seed1',
+    trainable='PPO',
+    restart_errored=True,
+)
+results = tuner.fit()
+"@
+```
+
+**Caveats:**
+- Restore requires the original `trainable='PPO'` + the same env registration to still exist. Re-run Phase 2 (launch Fabric + bootstrap) first so the 4 instances are up before resuming.
+- Restore preserves the random seed sequence but not the per-EnvRunner random state — minor divergence is expected.
+- If the restore itself errors with "checkpoint format mismatch," the Ray version may have changed since the checkpoint was written — fall back to launching fresh and accept the lost iters.
+
+---
+
 ## Phase 7 — M2 brainstorming (open-ended) — Task N7
 
 Once M1B is tagged, brainstorm M2 scope. Key open questions:
@@ -180,11 +293,23 @@ Output of Phase 7: a M2 brainstorm document at `docs/superpowers/specs/<date>-m2
 ---
 
 ## Estimated time for the full session
-- Pre-flight: 5 min
-- Bootstrap: 3 min
-- Training to convergence: **1-12 hours** depending on hyperparameters + canopy issues
-- Eval gate: 15 min
-- Tag: 5 min
-- M2 brainstorming: open-ended (1-3 hours for first design pass)
+- **Pre-flight (N1):** 5 min
+- **Bootstrap (N2):** 3 min
+- **Reward sanity check (N2.5):** 5 min
+- **Training to convergence (N3):** **1-2 hours of babysitting** + however long the wall-clock takes (no auto-stopper, you Ctrl-C on convergence)
+- **Eval gate (N5):** 15 min
+- **Tag (N6):** 5 min
+- **M2 brainstorming (N7):** open-ended (1-3 hours for first design pass)
+- **Tune stop-key path investigation (N7.5):** 30 min (post-tag, defer if M1B done)
 
-**Critical-path total to `m1b-verified`:** roughly half a day to a day of wall-clock, mostly hands-off training time. The interactive parts only take ~30 minutes spread across the run.
+**Critical-path total to `m1b-verified`:** ~half a day of wall-clock with focused 1-2h babysitting window. If reward sanity check (N2.5) fails OR canopy issue triggers an N4 intervention, add 1-2 hours per iteration.
+
+## Re-review delta vs the v1 chain
+
+Per the user's pre-implementation review:
+- Added N2.5 (reward sanity check) as a 5-min insurance step before N3.
+- Pre-N3 code fixes committed at `e979748` for per-worker AIUTOPIA_ROOT (SQLite contention prevention) and 200ms join-await in `carpet_spawn` (silences /clear race).
+- N3 now has explicit invariant-verification checks (per-worker dirs exist, checkpoints write, custom_metrics in TB, no /clear races).
+- N4 reframed from "sequel of N3" to "conditional interrupt during N3".
+- Added Phase 6.5 (resume-from-crash via `tune.Tuner.restore()`).
+- Added N7.5 (post-M1B Tune stop-key path investigation) — feeds M2's auto-stopper.
