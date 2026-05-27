@@ -61,18 +61,23 @@ class EpisodicRecord:
 
 @dataclass
 class EpisodicMemoryWriter:
-    """Buffers MEDIUM-importance records, immediate-writes HIGH ones.
-    Real Chroma writes are wired in M5 alongside summary-generation LLM
-    calls; in M0 this only buffers + counts so smoke tests are testable."""
-    high_count:   int = 0
-    medium_count: int = 0
+    """Importance-weighted writer.
+
+    M1-Pipeline change vs M0: now optionally takes a Chroma client and writes
+    real records. When `chroma_client=None` falls back to M0 buffer-only
+    counting (useful for unit tests that don't want Chroma overhead)."""
+
+    chroma_client: Any = None        # chromadb.ClientAPI or None
+    high_count:    int = 0
+    medium_count:  int = 0
     skipped_count: int = 0
-    _buffer: dict[str, list[EpisodicRecord]] = field(
+    _buffer:       dict[str, list[EpisodicRecord]] = field(
         default_factory=lambda: defaultdict(list))
 
     def maybe_write(self, record: EpisodicRecord) -> str:
         if record.importance_score >= HIGH_IMPORTANCE_THRESHOLD:
             self.high_count += 1
+            self._write_to_chroma([record])
             return "high"
         if record.importance_score >= MEDIUM_IMPORTANCE_THRESHOLD:
             self.medium_count += 1
@@ -82,6 +87,33 @@ class EpisodicMemoryWriter:
         return "skipped"
 
     def flush(self) -> int:
-        flushed = sum(len(v) for v in self._buffer.values())
+        """Flush all buffered MEDIUM records to Chroma. Returns count written."""
+        total = 0
+        for agent_uuid, records in list(self._buffer.items()):
+            if records:
+                self._write_to_chroma(records)
+                total += len(records)
         self._buffer.clear()
-        return flushed
+        return total
+
+    # ─────────────────────────────────────────────────────────────
+    def _write_to_chroma(self, records: list[EpisodicRecord]) -> None:
+        if self.chroma_client is None:
+            return  # M0-compatible no-op mode
+        from aiutopia.common.ids import memory_id_for
+        # Group by agent_uuid; one collection per agent
+        by_agent: dict[str, list[EpisodicRecord]] = defaultdict(list)
+        for r in records:
+            by_agent[r.agent_uuid].append(r)
+        for agent_uuid, recs in by_agent.items():
+            coll = self.chroma_client.get_or_create_collection(memory_id_for(agent_uuid))
+            ids       = [f"{r.agent_uuid}-{r.timestamp}-{i}" for i, r in enumerate(recs)]
+            docs      = [r.summary for r in recs]
+            metas     = [{
+                "timestamp":        r.timestamp,
+                "event_type":       r.event_type,
+                "importance_score": r.importance_score,
+                "participants_csv": "," + ",".join(r.participants) + "," if r.participants else ",",
+            } for r in recs]
+            embeds    = [r.embedding if r.embedding is not None else [0.0] * 384 for r in recs]
+            coll.add(ids=ids, documents=docs, metadatas=metas, embeddings=embeds)
