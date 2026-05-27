@@ -80,29 +80,29 @@ public class WorldOps {
     private final java.util.Random epRand = new java.util.Random();
 
     /** Per-episode reset for training:
-     *   - teleport agent to spawn (64, 71, -48)
+     *   - teleport agent to spawn (64, 66, -48) — 1 block above grass floor
      *   - clear agent inventory
-     *   - air-fill a cube around spawn
-     *   - place a ring of oak_log blocks, positions seeded by `seed`
+     *   - air-fill the arena above the grass floor (Y=66..70), preserves grass at Y=60..65
+     *   - place a ring of 8 oak_log blocks at Y=66 (on top of grass), radius 4-6, seeded
      *  Fast (~10ms). */
     public boolean resetEpisode(String playerName, long seed) {
         if (server == null) return false;
         try {
             net.minecraft.server.command.CommandManager cm = server.getCommandManager();
             net.minecraft.server.command.ServerCommandSource src = server.getCommandSource();
-            cm.executeWithPrefix(src, "/tp " + playerName + " 64 71 -48");
+            cm.executeWithPrefix(src, "/tp " + playerName + " 64 66 -48");
             cm.executeWithPrefix(src, "/clear " + playerName);
             cm.executeWithPrefix(src,
-                "/fill 48 72 -64 80 76 -32 air replace");
+                "/fill 48 66 -64 80 70 -32 air replace");
 
-            // Seeded ring: 8 logs at radius 2-3, angles jittered by seed
+            // Seeded ring: 8 logs at radius 4-6 on top of grass (Y=66), angles jittered by seed
             epRand.setSeed(seed);
             for (int i = 0; i < 8; i++) {
                 double theta = (2.0 * Math.PI * i / 8.0) + (epRand.nextDouble() - 0.5) * 0.4;
-                int r = 2 + epRand.nextInt(2);              // 2 or 3
+                int r = 4 + epRand.nextInt(3);              // 4, 5, or 6
                 int x = 64 + (int) Math.round(r * Math.cos(theta));
                 int z = -48 + (int) Math.round(r * Math.sin(theta));
-                cm.executeWithPrefix(src, "/setblock " + x + " 71 " + z + " oak_log");
+                cm.executeWithPrefix(src, "/setblock " + x + " 66 " + z + " oak_log");
             }
             return true;
         } catch (Exception e) {
@@ -112,7 +112,10 @@ public class WorldOps {
         }
     }
 
-    /** One-time setup at server boot when training mode is active. Idempotent. */
+    /** One-time setup at server boot when training mode is active. Idempotent.
+     *  Bakes a deterministic flat-grass arena around (64, 65, -48) and force-loads
+     *  the chunks so /setblock/setblock-style commands during resetEpisode always
+     *  succeed regardless of the world's natural terrain. */
     public boolean setupTrainingScene() {
         if (server == null) return false;
         try {
@@ -122,6 +125,11 @@ public class WorldOps {
             cm.executeWithPrefix(src, "/time set noon");
             cm.executeWithPrefix(src, "/gamerule doDaylightCycle false");
             cm.executeWithPrefix(src, "/gamerule doMobSpawning false");
+            // Keep training arena chunks resident so block ops always land
+            cm.executeWithPrefix(src, "/forceload add 32 -64 96 -16");
+            // Bake a solid grass floor and clear arena air above it
+            cm.executeWithPrefix(src, "/fill 48 60 -64 80 64 -32 grass_block replace");
+            cm.executeWithPrefix(src, "/fill 48 65 -64 80 80 -32 air replace");
             cm.executeWithPrefix(src, "/tick rate 300.0");   // Carpet 1.21.1 wants float
             return true;
         } catch (Exception e) {
