@@ -29,6 +29,10 @@ dependencies {
     // Py4J — Python ↔ Java bridge (§7.3)
     implementation "net.sf.py4j:py4j:0.10.9.9"
     include        "net.sf.py4j:py4j:0.10.9.9"
+
+    // GSON for JSON parsing on the Java side (action dispatch + obs emission)
+    implementation 'com.google.code.gson:gson:2.11.0'
+    include        'com.google.code.gson:gson:2.11.0'
 }
 
 java {
