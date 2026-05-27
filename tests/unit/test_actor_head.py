@@ -4,9 +4,11 @@ import torch
 from aiutopia.rl_module.actor_head import GathererActorHead, build_actor_head
 
 
-def test_actor_head_output_dim_is_340() -> None:
+def test_actor_head_output_dim_is_344() -> None:
+    # T7.5 fix: MultiBinary(4) -> TorchMultiCategorical needs 2*4=8 logits,
+    # not 4. Total: 256+8+2+2+6+6+64 = 344.
     head = GathererActorHead(config={})
-    assert head.OUTPUT_DIM == 340   # 6 + 64 + 6 + 2 + 256 + 2 + 4
+    assert head.OUTPUT_DIM == 344
 
 
 def test_actor_head_forward_shape() -> None:
@@ -15,7 +17,7 @@ def test_actor_head_forward_shape() -> None:
     hidden = torch.randn(batch, 256)
     goal   = torch.randn(batch, 512)
     out = head(hidden, goal)
-    assert out.shape == (batch, 340)
+    assert out.shape == (batch, 344)
 
 
 def test_build_actor_head_gatherer_only_in_m1() -> None:

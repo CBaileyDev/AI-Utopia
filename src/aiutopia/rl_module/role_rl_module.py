@@ -15,6 +15,7 @@ from typing import Any
 
 import torch
 from ray.rllib.core import Columns
+from ray.rllib.core.rl_module.apis.value_function_api import ValueFunctionAPI
 from ray.rllib.core.rl_module.torch.torch_rl_module import TorchRLModule
 
 from aiutopia.rl_module.actor_head     import build_actor_head
@@ -25,7 +26,7 @@ from aiutopia.rl_module.shared_backbone import SharedBackboneModule
 from aiutopia.rl_module.core_encoder   import CoreEncoderModule
 
 
-class AiUtopiaRoleRLModule(TorchRLModule):
+class AiUtopiaRoleRLModule(TorchRLModule, ValueFunctionAPI):
     """Per-role policy module with embedded shared submodules.
 
     Stateful: LSTM hidden carried across ticks via `Columns.STATE_IN`/`STATE_OUT`.
@@ -44,6 +45,26 @@ class AiUtopiaRoleRLModule(TorchRLModule):
         self.actor_head      = build_actor_head(self.role, cfg)
         self.pixel_encoder   = None         # M2+ for builder
         self._pixel_zero_dim = 64
+
+        # Set the action distribution class. Ray 2.55's default mapping does
+        # not support Dict action spaces; we must bind a TorchMultiDistribution
+        # with the actor head's child struct + slice lengths. See T5 for the
+        # alphabetical-slice contract.
+        from ray.rllib.core.distribution.torch.torch_distribution import (
+            TorchMultiDistribution,
+        )
+        from aiutopia.rl_module.actor_head import gatherer_action_dist_config
+
+        if self.role == "gatherer":
+            child_struct, input_lens = gatherer_action_dist_config()
+            self.action_dist_cls = TorchMultiDistribution.get_partial_dist_cls(
+                child_distribution_cls_struct=child_struct,
+                input_lens=input_lens,
+            )
+        else:
+            raise NotImplementedError(
+                f"action_dist_cls for role {self.role!r} not configured (M2+)"
+            )
 
     # ─────────────────────────────────────────────────────────────
     # RLlib new-API-stack stateful contract
@@ -65,6 +86,15 @@ class AiUtopiaRoleRLModule(TorchRLModule):
     def _forward_train(self, batch, **kwargs):
         return self._forward(batch, with_value=True)
 
+    # ─────────────────────────────────────────────────────────────
+    # ValueFunctionAPI — required by Ray 2.55's GAE connector. Returns
+    # V(s) for every (B,) or (B, T) entry in the batch. We piggyback on
+    # the shared _forward path so the LSTM hidden flows identically for
+    # value-only forward passes during GAE.
+    def compute_values(self, batch, embeddings=None):
+        out = self._forward(batch, with_value=True)
+        return out[Columns.VF_PREDS]
+
     def _forward(self, batch: dict, *, with_value: bool) -> dict:
         obs = batch[Columns.OBS]
 
@@ -73,10 +103,22 @@ class AiUtopiaRoleRLModule(TorchRLModule):
         # (B, T, GOAL_EMBED_DIM) under recurrent training).
         ref = obs["goal_embedding"]
         time_dimension = (ref.ndim == 3)
+
+        def _flatten_time(v):
+            """Fold T into B for any tensor; recurse into nested dicts; pass
+            non-tensor/non-dict values through untouched."""
+            if isinstance(v, dict):
+                return {k: _flatten_time(sub) for k, sub in v.items()}
+            if torch.is_tensor(v) and v.ndim >= 2:
+                return v.reshape(-1, *v.shape[2:])
+            return v
+
         if time_dimension:
             batch_size, seq_len = ref.shape[:2]
             # Flatten T into B for per-tick encoders, restore for LSTM.
-            obs_flat_t = {k: v.reshape(-1, *v.shape[2:]) for k, v in obs.items()}
+            # `obs` is a (possibly-nested) dict — action_mask is itself a Dict
+            # space, so we must recurse and skip non-tensor leaves.
+            obs_flat_t = {k: _flatten_time(v) for k, v in obs.items()}
         else:
             batch_size = ref.shape[0]
             seq_len = 1

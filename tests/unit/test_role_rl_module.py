@@ -55,7 +55,7 @@ def test_forward_inference_produces_action_dist() -> None:
     batched = _sample_batched(obs_space, batch=2)
     out = mrm["gatherer_policy"]._forward_inference({"obs": batched})
     assert "action_dist_inputs" in out
-    assert out["action_dist_inputs"].shape == (2, 340)
+    assert out["action_dist_inputs"].shape == (2, 344)
 
 
 def test_forward_train_emits_vf_preds() -> None:
@@ -76,7 +76,7 @@ def test_forward_train_with_time_dim() -> None:
     batched_t = {k: v.unsqueeze(1).expand(2, 4, *v.shape[1:]).contiguous()
                  for k, v in batched.items()}
     out = mrm["gatherer_policy"]._forward_train({"obs": batched_t})
-    assert out["action_dist_inputs"].shape == (2, 4, 340)
+    assert out["action_dist_inputs"].shape == (2, 4, 344)
     assert out["vf_preds"].shape == (2, 4)
 
 
