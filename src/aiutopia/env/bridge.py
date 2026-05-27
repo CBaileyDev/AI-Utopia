@@ -48,7 +48,7 @@ class FabricBridge:
         # py4j try to call .send_command/.shutdown_gateway on it later and
         # crash with AttributeError. Use the kwarg.
         self.gw = JavaGateway(gateway_parameters=GatewayParameters(
-            port=self.port, auto_field=True))
+            port=self.port, auto_field=True, auto_convert=True))
         self.entry_point = self.gw.entry_point
 
     def close(self) -> None:
@@ -106,8 +106,10 @@ class FabricBridge:
                                                       skill_invocation_id)
 
     def flush_comm_batch(self, messages: list[dict]) -> None:
-        encoded = [json.dumps(m) for m in messages]
-        # Py4J auto-converts Python list to java.util.List
+        # Messages contain numpy arrays from policy outputs (comm_payload is
+        # a 128-d ndarray). Use _to_python to make them JSON-serializable —
+        # same fix as encode_action got for dispatch_skill.
+        encoded = [json.dumps(_to_python(m)) for m in messages]
         self.entry_point.commBus().flushBatch(encoded)
 
     def drain_chat_events(self) -> list[dict]:

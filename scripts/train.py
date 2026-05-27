@@ -11,7 +11,8 @@ os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import ray
 from ray import tune
-from ray.train import CheckpointConfig, RunConfig
+from ray.tune import RunConfig
+from ray.train import CheckpointConfig
 
 from aiutopia.common.config import Paths
 from aiutopia.common.logging import setup_logging, get_logger
@@ -63,6 +64,9 @@ def main() -> None:
                         help="Ray EnvRunner workers (= # of Fabric instances)")
     parser.add_argument("--num-envs-per-runner", type=int, default=1,
                         help="envs per worker (1 keeps each env pinned to its own agent)")
+    parser.add_argument("--num-learners", type=int, default=0,
+                        help="Ray Learner processes. 0 runs Learner in driver "
+                             "(required on Windows where PyTorch lacks libuv).")
     args = parser.parse_args()
 
     paths = Paths.from_env(); paths.ensure()
@@ -75,6 +79,9 @@ def main() -> None:
         num_env_runners=args.num_env_runners,
         num_envs_per_env_runner=args.num_envs_per_runner,
     )
+    # Override num_learners for Windows-libuv compat (T7.5 finding).
+    if args.num_learners == 0:
+        cfg = cfg.learners(num_learners=0, num_gpus_per_learner=1.0)
     env_config = cfg.env_config if hasattr(cfg, "env_config") else \
                   cfg.to_dict().get("env_config", {})
     cfg = cfg.callbacks(_make_callbacks_class(env_config, args.evaluation_interval))
@@ -87,9 +94,7 @@ def main() -> None:
             name=run_id,
             storage_path=str(paths.runs_dir),
             checkpoint_config=CheckpointConfig(
-                checkpoint_frequency=50,
                 num_to_keep=10,
-                checkpoint_at_end=True,
                 checkpoint_score_attribute="env_runners/episode_return_mean",
                 checkpoint_score_order="max",
             ),
@@ -98,7 +103,6 @@ def main() -> None:
                 "custom_metrics/M1/gate_passed":            0.5,  # >= 0.5 = passed
             },
             verbose=1,
-            log_to_file=True,
         ),
     )
     log.info("starting training: %s", run_id)
