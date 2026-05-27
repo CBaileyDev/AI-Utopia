@@ -14,6 +14,26 @@ from typing import Any
 from py4j.java_gateway import GatewayParameters, JavaGateway
 
 
+def _to_python(v):
+    """Recursively convert numpy scalars / arrays to plain Python types so
+    json.dumps doesn't crash. RL policy outputs are numpy-typed."""
+    import numpy as np
+    if isinstance(v, np.ndarray):
+        return v.tolist()
+    if isinstance(v, np.generic):   # np.int64, np.float32, etc.
+        return v.item()
+    if isinstance(v, dict):
+        return {k: _to_python(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_to_python(x) for x in v]
+    return v
+
+
+def encode_action(action_dict: dict) -> str:
+    """numpy-safe json.dumps for action dicts coming from a gym policy."""
+    return json.dumps(_to_python(action_dict))
+
+
 class FabricBridge:
     """Single connection to one Fabric-side Py4J gateway."""
 
@@ -81,7 +101,7 @@ class FabricBridge:
 
     def dispatch_skill(self, agent_id: str, action_dict: dict,
                        skill_invocation_id: str) -> None:
-        encoded = json.dumps(action_dict)
+        encoded = encode_action(action_dict)
         self.entry_point.motorBridge().dispatchSkill(agent_id, encoded,
                                                       skill_invocation_id)
 

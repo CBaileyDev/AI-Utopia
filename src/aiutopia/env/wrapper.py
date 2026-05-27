@@ -23,6 +23,7 @@ M1-Pipeline T15:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from typing import Any
 
@@ -30,8 +31,11 @@ import numpy as np
 from gymnasium.spaces import Dict as DictSpace
 from pettingzoo import ParallelEnv
 
+from aiutopia.common.config import Paths
 from aiutopia.env.action_mask import compute_gatherer_action_mask
 from aiutopia.env.bridge import FabricBridge
+from aiutopia.env.exploit import ExploitDetector
+from aiutopia.env.reward import compute_reward_stage_1
 from aiutopia.env.spaces import (
     build_role_action_space,
     build_role_observation_space,
@@ -39,6 +43,8 @@ from aiutopia.env.spaces import (
     GATHERER_KEYS,
     GOAL_EMBED_DIM,
 )
+from aiutopia.memory.client import open_chroma
+from aiutopia.memory.writer import EpisodicMemoryWriter, EpisodicRecord
 from aiutopia.planner.goal_spec import GoalSpecAdapter
 from aiutopia.schemas.plan import (
     Constraints, GoalSpecification, Subgoal, TargetState, TerminationConditions,
@@ -160,6 +166,27 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
             v: k for k, v in self.agent_id_to_player_name.items()
         }
 
+        # M1-Pipeline T16: per-agent ExploitDetector (5 rules from §5.3).
+        self.exploit_detectors: dict[str, ExploitDetector] = {
+            agent: ExploitDetector() for agent in self.agents_init
+        }
+        # R7: real memory writes — one writer shared across agents,
+        # each agent's records routed to its own Chroma collection.
+        # In tests pass `enable_memory_writes=False` to skip the heavy
+        # Chroma init.
+        if config.get("enable_memory_writes", True):
+            paths = Paths.from_env()
+            chroma_client = open_chroma(paths.chroma_dir)
+            self.memory_writer = EpisodicMemoryWriter(chroma_client=chroma_client)
+        else:
+            self.memory_writer = EpisodicMemoryWriter(chroma_client=None)
+
+        # Map env agent_id → agent_uuid (ULID) for memory writes. Populated
+        # by the caller via config (same shape as agent_id_to_player_name).
+        self.agent_id_to_uuid: dict[str, str] = dict(
+            config.get("agent_id_to_uuid", {})
+        )
+
         # GoalSpecAdapter — M1-Pipeline ships a hardcoded "collect 64 oak_log"
         # goal embedded into every obs. Plan B replaces this with planner-
         # emitted Subgoal objects routed via aiutopia.planner.event_queue.
@@ -212,22 +239,106 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
         return obs, infos
 
     def step(self, actions: dict[str, dict]):
+        # 1. Dispatch each agent's action via Py4J (mid-tick comm flush).
+        # R6: use player_name from agent_id_to_player_name; Java only knows
+        # player names, NOT env agent_ids.
         comm_msgs: list[dict] = []
         for agent, act in actions.items():
             self.skill_counters[agent] += 1
             invocation_id = f"{agent}-{self.skill_counters[agent]}"
-            self.bridge.dispatch_skill(agent, act, invocation_id)
+            player_name = self.agent_id_to_player_name.get(agent, agent)
+            self.bridge.dispatch_skill(player_name, act, invocation_id)
             if int(act.get("should_broadcast", 0)) == 1 and np.asarray(
                     act.get("comm_target_mask", [0, 0, 0, 0])).any():
-                comm_msgs.append({"sender": agent, "action": act})
-        self.bridge.flush_comm_batch(comm_msgs)            # mid-tick flush
-        self.bridge.advance_tick_await_events(timeout_ms=30_000)
+                comm_msgs.append({"sender": player_name, "action": act})
+        if comm_msgs:
+            self.bridge.flush_comm_batch(comm_msgs)
 
+        # 2. Advance world; collect SkillCompletionEvents.
+        # Completion events come back keyed by player_name (Java side).
+        # We translate back to env agent_id for downstream consumers.
+        completion_jsons = self.bridge.advance_tick_await_events(timeout_ms=30_000)
+        completions_by_agent: dict[str, dict] = {}
+        for j in completion_jsons:
+            try:
+                evt = json.loads(j) if isinstance(j, str) else j
+                env_aid = self._player_name_to_agent_id.get(
+                    evt.get("agentId", ""), evt.get("agentId", ""))
+                completions_by_agent[env_aid] = evt
+            except Exception:
+                continue
+
+        # 3. Batched observation read (translates Java player_name keys
+        # → env agent_id and applies _normalize_raw — see T15 _read_all_obs).
         new_obs = self._read_all_obs()
-        rew  = {a: 0.0 for a in self.agents}               # M1: real reward stack
-        term = {a: False for a in self.agents}
-        trunc = {a: self._tick >= self.max_ticks for a in self.agents}
-        info: dict[str, dict] = {a: {} for a in self.agents}
+        rew: dict[str, float] = {}
+        term: dict[str, bool] = {}
+        trunc: dict[str, bool] = {}
+        info: dict[str, dict] = {}
+
+        for agent in list(self.agents):
+            completion = completions_by_agent.get(agent, {})
+            n_clipped = bin(int(completion.get("clippedAxesBitset", 0))).count("1")
+            # health is now a numpy shape-(1,) array after _normalize_raw.
+            prev_h = float(self._prev_obs.get(agent, {}).get("health", np.array([20.0]))[0])
+            curr_h = float(new_obs.get(agent, {}).get("health", np.array([20.0]))[0])
+            died_this_tick = curr_h <= 0 and prev_h > 0
+            # Run exploit detector
+            exploit_penalties = self.exploit_detectors[agent].step(
+                role=_role_of(agent),
+                obs_prev=self._prev_obs.get(agent, {}),
+                obs_curr=new_obs.get(agent, {}),
+                action=actions.get(agent, {}),
+                env_meta={
+                    "global_step": self._tick,
+                    "skill_result_code": completion.get("resultCode", "RUNNING"),
+                },
+            )
+            env_meta = {
+                "died_this_tick": died_this_tick,
+                "n_clipped_param_axes": n_clipped,
+                "exploit_penalties": [(n.value, p) for n, p in exploit_penalties],
+            }
+            rew[agent] = compute_reward_stage_1(
+                role=_role_of(agent),
+                obs_prev=self._prev_obs.get(agent, {}),
+                obs_curr=new_obs.get(agent, {}),
+                action=actions.get(agent, {}),
+                env_meta=env_meta,
+            )
+            term[agent]  = died_this_tick
+            trunc[agent] = self._tick >= self.max_ticks
+            info[agent]  = {
+                "skill_completion":   completion,
+                "exploit_penalties":  [(n.value, p) for n, p in exploit_penalties],
+                "n_clipped":          n_clipped,
+            }
+
+            # R7: episodic memory write per tick. Importance heuristic:
+            #  - |reward| normalized (clip to [0,1] by /5.0)
+            #  - +0.3 if a skill completed this tick (any outcome)
+            #  - +0.4 if the agent died this tick
+            # Three classes per spec §4.9 (HIGH ≥0.7 immediate / MEDIUM ≥0.3 batched /
+            # below skipped). EpisodicMemoryWriter does the bucketing.
+            agent_uuid = self.agent_id_to_uuid.get(agent)
+            if agent_uuid:  # only write if we have a real ULID (CLI-spawned)
+                abs_r = min(1.0, abs(rew[agent]) / 5.0)
+                completed_bonus = 0.3 if completion.get("resultCode") in {
+                    "COMPLETED", "FAILED_TIMEOUT", "IMMEDIATE_FAILURE",
+                } else 0.0
+                death_bonus = 0.4 if died_this_tick else 0.0
+                importance = min(1.0, abs_r + completed_bonus + death_bonus)
+                self.memory_writer.maybe_write(EpisodicRecord(
+                    agent_uuid=agent_uuid,
+                    timestamp=self._tick,
+                    event_type=completion.get("resultCode", "tick"),
+                    participants=[],
+                    importance_score=importance,
+                    summary=(f"r={rew[agent]:.2f} "
+                             f"skill={actions.get(agent, {}).get('skill_type', '?')} "
+                             f"out={completion.get('resultCode', 'RUNNING')}"),
+                    embedding=None,
+                ))
 
         self._prev_obs = new_obs
         self._tick += 1
