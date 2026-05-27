@@ -73,7 +73,7 @@ def spawn(
             typer.echo("ERROR: Fabric server reports unhealthy; aborting Carpet spawn",
                        err=True)
             raise typer.Exit(code=1)
-        ok = bridge.carpet_spawn(chosen_name, skin=skin)
+        ok = bridge.carpet_spawn(chosen_name, skin=skin, role=role)
         if not ok:
             typer.echo(f"ERROR: Carpet /player {chosen_name} spawn failed", err=True)
             raise typer.Exit(code=2)

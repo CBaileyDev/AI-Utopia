@@ -67,7 +67,7 @@ public class Py4JEntryPoint {
     }
 
     /** Spawn a Carpet fake player with optional skin. Returns true on success. */
-    public boolean carpetSpawn(String playerName, String skin) {
-        return world.carpetSpawn(playerName, skin);
+    public boolean carpetSpawn(String playerName, String skin, String role) {
+        return world.carpetSpawn(playerName, skin, role);
     }
 }

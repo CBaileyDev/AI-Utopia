@@ -38,7 +38,7 @@ public class WorldOps {
      *  the chosen skin instead of the default. Failure to apply the
      *  skin is logged but does NOT fail the overall spawn — the
      *  agent still exists, just with the default skin. */
-    public boolean carpetSpawn(String playerName, String skin) {
+    public boolean carpetSpawn(String playerName, String skin, String role) {
         if (server == null) return false;
         try {
             net.minecraft.server.command.CommandManager cm =
@@ -51,7 +51,9 @@ public class WorldOps {
                 server.getCommandSource(),
                 "/player " + playerName + " spawn"
             );
-            dev.aiutopia.mod.agent.AgentRegistry.registerAgent(playerName);
+            // Register WITH role so obs builder dispatches the right overlay
+            if (role == null || role.isEmpty()) role = "gatherer";
+            dev.aiutopia.mod.agent.AgentRegistry.registerAgent(playerName, role);
 
             // NOTE: Carpet 1.4.147 (MC 1.21.1) does not expose a /player <name>
             // loadProfile <skin> subcommand. The fake player's skin is derived
