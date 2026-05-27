@@ -70,4 +70,20 @@ public class Py4JEntryPoint {
     public boolean carpetSpawn(String playerName, String skin, String role) {
         return world.carpetSpawn(playerName, skin, role);
     }
+
+    /** DEV/SMOKE ONLY: run an arbitrary server command (e.g. /setblock).
+     *  Plan B should restrict this behind an auth check or remove it entirely
+     *  before exposing the server publicly. Returns true if the command
+     *  completed without throwing; false on exception or detached server. */
+    public boolean runCommand(String command) {
+        if (server == null) return false;
+        try {
+            server.getCommandManager().executeWithPrefix(
+                server.getCommandSource(), command);
+            return true;
+        } catch (Exception e) {
+            AiUtopiaMod.LOG.warn("runCommand failed for {!r}: {}", command, e.getMessage());
+            return false;
+        }
+    }
 }
