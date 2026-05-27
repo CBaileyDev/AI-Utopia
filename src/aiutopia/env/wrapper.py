@@ -147,6 +147,16 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
         self.bridge = FabricBridge(port=ports[widx])
         self.bridge.open()
 
+        # M1-Training likely-to-break fix #1: per-worker AIUTOPIA_ROOT so 4
+        # concurrent EnvRunners don't collide on the same identity.db and
+        # Chroma collections. Each worker gets its own root suffixed with its
+        # worker_index. The root is set BEFORE any Paths.from_env() call below.
+        if config.get("aiutopia_root_per_worker", True) and ports:
+            import os as _os
+            base = _os.environ.get("AIUTOPIA_ROOT", "")
+            if base:
+                _os.environ["AIUTOPIA_ROOT"] = f"{base.rstrip('/').rstrip(chr(92))}_w{widx}"
+
         self.skill_counters: dict[str, int] = {}
         self._prev_obs: dict[str, Any] = {}
 

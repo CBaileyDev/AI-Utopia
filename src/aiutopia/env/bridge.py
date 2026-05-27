@@ -118,9 +118,18 @@ class FabricBridge:
 
     def carpet_spawn(self, player_name: str,
                       skin: str | None = None,
-                      role: str = "gatherer") -> bool:
-        return bool(self.entry_point.carpetSpawn(
+                      role: str = "gatherer",
+                      *, await_join_ms: int = 200) -> bool:
+        """Spawn a Carpet fake player. Waits `await_join_ms` for the join
+        event so subsequent /clear or /tp don't race with 'No player was found'
+        (M1-Training likely-to-break fix). Set `await_join_ms=0` for
+        unit tests / smoke that don't care about the race."""
+        ok = bool(self.entry_point.carpetSpawn(
             player_name, skin or "", role))
+        if ok and await_join_ms > 0:
+            import time as _time
+            _time.sleep(await_join_ms / 1000.0)
+        return ok
 
     def reset_episode(self, player_name: str, seed: int) -> bool:
         """Per-episode reset with seeded log placement (T12)."""
