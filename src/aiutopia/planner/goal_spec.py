@@ -6,6 +6,7 @@ learned routing. BGE model is lazy-loaded on first call to keep cold
 imports fast (tests inject a fake)."""
 from __future__ import annotations
 
+import zlib
 from typing import Any, Protocol
 
 import numpy as np
@@ -41,8 +42,10 @@ def build_structured_features(subgoal: Subgoal) -> np.ndarray:
     out = np.zeros(_STRUCTURED_DIM, dtype=np.float32)
     out[_ROLE_INDEX[subgoal.role]] = 1.0
     # inventory_delta: hash item name → bucket in [4, 68) so it's stable
+    # across processes (Python's built-in hash() is randomized per-process;
+    # crc32 is deterministic and required for eval replay determinism, R10).
     for item, qty in subgoal.goal_specification.target_state.inventory_delta.items():
-        bucket = 4 + (hash(item) % 64)
+        bucket = 4 + (zlib.crc32(item.encode("utf-8")) % 64)
         out[bucket] = max(-1.0, min(1.0, float(qty) / 64.0))
     out[68] = subgoal.goal_specification.termination_conditions.timeout_ticks / 12000.0
     out[69] = subgoal.priority / 10.0

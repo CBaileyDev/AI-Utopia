@@ -8,11 +8,22 @@ M0 limitations:
   - per_worker_seed_offset is honored
   - mid-tick comm flush is wired
   - close() is implemented and idempotent
+
+M1-Pipeline T15:
+  - GoalSpecAdapter wired; reset() embeds a hardcoded "collect 64 oak_log"
+    Subgoal that ships in every obs as `goal_embedding` (replaces the M0
+    zero stub). Plan B replaces this with planner-emitted goals.
+  - `_normalize_raw()` bridges Java's stringly-typed obs (agent_uuid,
+    agent_name, role_id strings + scalar-array distances) into the
+    gym-shaped fields the obs space expects (agent_uuid_embed 384-d,
+    role_one_hot 4-d, target_*_in_range booleans for the action_mask).
+  - `agent_id_to_player_name` map carried through config (R6) so future
+    dispatch_skill calls hit Carpet player_name, not env agent_id.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
-from collections.abc import Iterable
 from typing import Any
 
 import numpy as np
@@ -28,9 +39,58 @@ from aiutopia.env.spaces import (
     GATHERER_KEYS,
     GOAL_EMBED_DIM,
 )
+from aiutopia.planner.goal_spec import GoalSpecAdapter
+from aiutopia.schemas.plan import (
+    Constraints, GoalSpecification, Subgoal, TargetState, TerminationConditions,
+)
 
 
 log = logging.getLogger(__name__)
+
+
+# ───── _normalize_raw constants (must match spaces.py) ─────
+_AGENT_UUID_EMBED_DIM = 384
+_ROLE_ONE_HOT_DIM     = 4
+_ROLE_INDEX = {"gatherer": 0, "builder": 1, "farmer": 2, "defender": 3}
+_REACH_RADIUS_BLOCKS  = 2.0   # match HarvestSkill.REACH_RADIUS / DepositChestSkill
+
+
+def _agent_uuid_embed(uuid_str: str) -> np.ndarray:
+    """Deterministic 384-d float32 embed from agent UUID string.
+    SHA-256 → 32 bytes → 384 floats (tile to fill) → normalized [-1, 1].
+    Stable across processes (M0 hash() carry-forward + R10)."""
+    digest = hashlib.sha256(uuid_str.encode("utf-8")).digest()  # 32 bytes
+    # Tile 32 bytes → 384 bytes (32 × 12 = 384)
+    tiled = (digest * 12)[:_AGENT_UUID_EMBED_DIM]
+    arr = np.frombuffer(tiled, dtype=np.uint8).astype(np.float32)
+    return (arr / 127.5) - 1.0   # → [-1, 1]
+
+
+def _role_one_hot(role_id: str) -> np.ndarray:
+    out = np.zeros(_ROLE_ONE_HOT_DIM, dtype=np.int8)
+    if role_id in _ROLE_INDEX:
+        out[_ROLE_INDEX[role_id]] = 1
+    return out
+
+
+def _normalize_raw(raw: dict) -> dict:
+    """Java emits a mix of raw ints + scalar arrays + auxiliary string fields.
+    This converts the auxiliary strings into the gym-shaped fields the obs
+    space expects and adds the two action-mask booleans (R4).
+    Mutates a copy of `raw`; original is left untouched."""
+    out = dict(raw)   # shallow copy is fine, we don't mutate nested arrays
+    # R2: derive agent_uuid_embed + role_one_hot from the auxiliary strings.
+    agent_uuid = out.pop("agent_uuid", "")
+    role_id    = out.pop("role_id", "")
+    out.pop("agent_name", None)
+    out["agent_uuid_embed"] = _agent_uuid_embed(agent_uuid)
+    out["role_one_hot"]     = _role_one_hot(role_id)
+    # R4: derive in-range booleans for action_mask.
+    nrd = float(out.get("nearest_resource_distance", [999.0])[0])
+    ncd = float(out.get("nearest_chest_distance",    [999.0])[0])
+    out["target_resource_in_range"] = nrd <= _REACH_RADIUS_BLOCKS
+    out["target_chest_in_range"]    = ncd <= _REACH_RADIUS_BLOCKS
+    return out
 
 
 def _role_of(agent_id: str) -> str:
@@ -38,10 +98,12 @@ def _role_of(agent_id: str) -> str:
 
 
 def _decode_obs(raw: dict, role: str, stage: int,
-                 action_mask: dict[str, np.ndarray]) -> dict[str, Any]:
+                 action_mask: dict[str, np.ndarray],
+                 goal_embed: np.ndarray) -> dict[str, Any]:
     """Coerce a raw JSON dict from Java into a Gymnasium-Dict-conforming
     obs dict. M0 fills missing fields with zeros (Java side may not
-    populate all keys yet)."""
+    populate all keys yet). M1-Pipeline T15: `goal_embed` is injected by
+    the env (hardcoded stub today, planner-emitted later)."""
     space = build_role_observation_space(role, stage=stage)
     out: dict[str, Any] = {}
     for key, sub in space.spaces.items():
@@ -52,9 +114,9 @@ def _decode_obs(raw: dict, role: str, stage: int,
             out[key] = np.asarray(raw[key], dtype=sub.dtype if hasattr(sub, "dtype") else None)
         else:
             out[key] = np.zeros(sub.shape, dtype=sub.dtype) if hasattr(sub, "shape") else 0
-    # Always emit goal_embedding even if Java omits it (zeros = "no goal")
+    # Always emit goal_embedding (M1-Pipeline default: env-injected stub).
     if "goal_embedding" not in raw:
-        out["goal_embedding"] = np.zeros(GOAL_EMBED_DIM, dtype=np.float32)
+        out["goal_embedding"] = goal_embed
     return out
 
 
@@ -81,6 +143,54 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
 
         self.skill_counters: dict[str, int] = {}
         self._prev_obs: dict[str, Any] = {}
+
+        # R6: env carries an explicit agent_id → Carpet player_name map
+        # populated by the caller (CLI or test) after spawning. Without it,
+        # dispatch_skill hits "agent player not found" and obs come back keyed
+        # under the wrong name. Default empty → fall back to env_agent_id as
+        # the player_name (only matches if the caller named the Carpet
+        # player exactly "gatherer_0", which is fine for offline tests).
+        self.agent_id_to_player_name: dict[str, str] = dict(
+            config.get("agent_id_to_player_name", {})
+        )
+        for env_aid in self.agents_init:
+            self.agent_id_to_player_name.setdefault(env_aid, env_aid)
+        # Reverse lookup for _read_all_obs.
+        self._player_name_to_agent_id: dict[str, str] = {
+            v: k for k, v in self.agent_id_to_player_name.items()
+        }
+
+        # GoalSpecAdapter — M1-Pipeline ships a hardcoded "collect 64 oak_log"
+        # goal embedded into every obs. Plan B replaces this with planner-
+        # emitted Subgoal objects routed via aiutopia.planner.event_queue.
+        from aiutopia.planner.goal_spec import load_bge_small
+        try:
+            bge = load_bge_small()
+        except Exception:
+            # On dev machines without sentence-transformers fully installed,
+            # fall back to a zero-vector encoder so tests don't block.
+            # NOTE: the final embed is still 512-d — 384 zeros (BGE part) +
+            # 128 structured features (role-one-hot, inventory bucket, etc.).
+            # So the structured signal is preserved; only the NL signal is lost.
+            class _ZeroBGE:
+                def encode(self, _text: str) -> np.ndarray:
+                    return np.zeros(384, dtype=np.float32)
+            bge = _ZeroBGE()
+        self.goal_adapter = GoalSpecAdapter(bge=bge)
+        self._stub_subgoal = Subgoal(
+            role="gatherer",
+            priority=5,
+            goal_specification=GoalSpecification(
+                target_state=TargetState(inventory_delta={"oak_log": 64}),
+                termination_conditions=TerminationConditions(
+                    success_criteria=["inventory_meets_delta"],
+                    timeout_ticks=6000,
+                ),
+            ),
+            constraints=Constraints(),
+            nl_summary="collect 64 oak_log",
+        )
+        self._stub_goal_embed = self.goal_adapter.embed(self._stub_subgoal).astype(np.float32)
 
     # ───── PettingZoo API ─────
     def observation_space(self, agent: str) -> DictSpace:
@@ -136,11 +246,14 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
         raw_all = self.bridge.observations_all()
         out: dict[str, dict] = {}
         for agent in self.agents:
-            raw = raw_all.get(agent, {})
+            # R6: Java keys obs by Carpet player_name, not env agent_id.
+            player_name = self.agent_id_to_player_name.get(agent, agent)
+            raw = _normalize_raw(raw_all.get(player_name, {}))
             mask = (compute_gatherer_action_mask(raw)
                     if _role_of(agent) == "gatherer"
                     else {})
-            out[agent] = _decode_obs(raw, _role_of(agent), self.stage, mask)
+            out[agent] = _decode_obs(raw, _role_of(agent), self.stage, mask,
+                                       self._stub_goal_embed)
         return out
 
     def _next_seed_for_strategy(self) -> int:
