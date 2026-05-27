@@ -8,8 +8,9 @@ from aiutopia.train.config import m1_gatherer_config, ENV_NAME
 def test_m1_gatherer_config_builds() -> None:
     cfg = m1_gatherer_config()
     d = cfg.to_dict()
-    assert d["train_batch_size"] == 4096
-    assert d["minibatch_size"] == 512
+    # Defaults bumped down for slow-env workers (T21 v12 timeout finding).
+    assert d["train_batch_size"] == 2048
+    assert d["minibatch_size"] == 256
     assert d["num_epochs"] == 5
     assert d["gamma"] == 0.99
     assert d["lr"] == 3.0e-4
