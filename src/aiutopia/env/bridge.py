@@ -119,3 +119,10 @@ class FabricBridge:
                       role: str = "gatherer") -> bool:
         return bool(self.entry_point.carpetSpawn(
             player_name, skin or "", role))
+
+    def reset_episode(self, player_name: str, seed: int) -> bool:
+        """Per-episode reset with seeded log placement (T12)."""
+        return bool(self.entry_point.resetEpisode(player_name, int(seed)))
+
+    def setup_training_scene(self) -> bool:
+        return bool(self.entry_point.setupTrainingScene())

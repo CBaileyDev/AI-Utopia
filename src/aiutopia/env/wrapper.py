@@ -230,6 +230,16 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
         if seed is None:
             seed = self._next_seed_for_strategy()
         self.bridge.reset_world(seed)
+        # M1B: per-episode reset (T13) — teleport, clear inventory, place
+        # seeded oak_log ring for each registered agent.
+        for agent_id in self.agents_init:
+            player_name = self.agent_id_to_player_name.get(agent_id)
+            if player_name:
+                self.bridge.reset_episode(player_name, int(seed))
+        # Reset exploit detectors for the new episode
+        from aiutopia.env.exploit import ExploitDetector
+        for agent_id in list(self.exploit_detectors.keys()):
+            self.exploit_detectors[agent_id] = ExploitDetector()
         self.agents = list(self.agents_init)
         self.skill_counters = {a: 0 for a in self.agents}
         self._tick = 0
