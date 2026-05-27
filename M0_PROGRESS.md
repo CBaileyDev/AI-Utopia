@@ -205,3 +205,44 @@ What M1 adds:
 - Per-tick RL loop: replace MotorBridge stub `server.execute(() -> {})` with real Baritone calls
 - First weight promotion via `aiutopia promote-weights --role gatherer`
 - First passing determinism check on real weights
+
+---
+
+## M1-Pipeline Progress
+
+**Status:** M1-Pipeline source-complete and live-smoke verified.
+**Tag:** `m1a-verified` at the commit that lands T22.
+
+### What changed vs M0
+
+- **Motor module is real.** `MotorBridge.dispatchSkill` parses action JSON,
+  constructs a per-skill `SkillExecutor`, runs it across server ticks,
+  emits `SkillCompletionEvent` JSON on terminal results.
+- **5 skill executors live:** NAVIGATE (direct-line walk), HARVEST (find
+  nearest matching block, walk to it, break it), DEPOSIT_CHEST (find nearest
+  chest, transfer all inventory), SEARCH (yaw rotation scan), WAIT (no-op).
+- **Observation pipeline emits real data.** `WorldOps.observationsAll`
+  composes per-agent obs via `ObservationBuilder` (CoreObsBuilder +
+  GathererOverlayBuilder); Python receives populated Dict obs not zeros.
+- **Reward computation live.** `env.step()` calls
+  `compute_reward_stage_1()` per agent. Delta-inventory + PBRS shaping +
+  death/time/clip/exploit penalties.
+- **ExploitDetector wired.** 5 per-agent rules (DROP_SPAM, OSCILLATION,
+  INV_REPEAT, LAZY_INACTION, NOOP_SKILL_SPAM). Multi-agent BULK_FARMING
+  is M2+ when builder + gatherer coexist.
+- **Episodic memory writes live.** Chroma collections receive HIGH+MEDIUM
+  importance records. `aiutopia memory inspect` returns real data.
+- **CLI gained `agent drive`** for manual skill dispatch without an RL policy.
+
+### What's still NOT trained
+The agent doesn't learn anything yet. `aiutopia agent drive ...` is a manual
+remote control. Plan B (M1-Training) adds the PPO config, RLModule, training
+driver, and the actual training run that takes a freshly-spawned gatherer to
+80% success on "collect 64 oak_log".
+
+### Plan B prereqs (inherits from M1-Pipeline)
+- All Plan A scaffolding above
+- Real obs in Python's Dict format (verified live)
+- Real reward computation with PBRS shaping (verified live)
+- ExploitDetector wired into env.step() (verified live)
+- Carpet fake player responds to NAVIGATE/HARVEST/DEPOSIT_CHEST/SEARCH/WAIT
