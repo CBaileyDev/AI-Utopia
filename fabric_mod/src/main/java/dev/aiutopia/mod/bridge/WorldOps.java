@@ -76,4 +76,58 @@ public class WorldOps {
             return false;
         }
     }
+
+    private final java.util.Random epRand = new java.util.Random();
+
+    /** Per-episode reset for training:
+     *   - teleport agent to spawn (64, 71, -48)
+     *   - clear agent inventory
+     *   - air-fill a cube around spawn
+     *   - place a ring of oak_log blocks, positions seeded by `seed`
+     *  Fast (~10ms). */
+    public boolean resetEpisode(String playerName, long seed) {
+        if (server == null) return false;
+        try {
+            net.minecraft.server.command.CommandManager cm = server.getCommandManager();
+            net.minecraft.server.command.ServerCommandSource src = server.getCommandSource();
+            cm.executeWithPrefix(src, "/tp " + playerName + " 64 71 -48");
+            cm.executeWithPrefix(src, "/clear " + playerName);
+            cm.executeWithPrefix(src,
+                "/fill 48 72 -64 80 76 -32 air replace");
+
+            // Seeded ring: 8 logs at radius 2-3, angles jittered by seed
+            epRand.setSeed(seed);
+            for (int i = 0; i < 8; i++) {
+                double theta = (2.0 * Math.PI * i / 8.0) + (epRand.nextDouble() - 0.5) * 0.4;
+                int r = 2 + epRand.nextInt(2);              // 2 or 3
+                int x = 64 + (int) Math.round(r * Math.cos(theta));
+                int z = -48 + (int) Math.round(r * Math.sin(theta));
+                cm.executeWithPrefix(src, "/setblock " + x + " 71 " + z + " oak_log");
+            }
+            return true;
+        } catch (Exception e) {
+            dev.aiutopia.mod.AiUtopiaMod.LOG.error(
+                "resetEpisode failed for {} seed={}: {}", playerName, seed, e.getMessage());
+            return false;
+        }
+    }
+
+    /** One-time setup at server boot when training mode is active. Idempotent. */
+    public boolean setupTrainingScene() {
+        if (server == null) return false;
+        try {
+            net.minecraft.server.command.CommandManager cm = server.getCommandManager();
+            net.minecraft.server.command.ServerCommandSource src = server.getCommandSource();
+            cm.executeWithPrefix(src, "/difficulty peaceful");
+            cm.executeWithPrefix(src, "/time set noon");
+            cm.executeWithPrefix(src, "/gamerule doDaylightCycle false");
+            cm.executeWithPrefix(src, "/gamerule doMobSpawning false");
+            cm.executeWithPrefix(src, "/tick rate 300.0");   // Carpet 1.21.1 wants float
+            return true;
+        } catch (Exception e) {
+            dev.aiutopia.mod.AiUtopiaMod.LOG.error(
+                "setupTrainingScene failed: {}", e.getMessage());
+            return false;
+        }
+    }
 }

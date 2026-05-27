@@ -86,4 +86,14 @@ public class Py4JEntryPoint {
             return false;
         }
     }
+
+    /** Per-episode reset with a seed for deterministic log placement. */
+    public boolean resetEpisode(String playerName, long seed) {
+        return world.resetEpisode(playerName, seed);
+    }
+
+    /** One-time training-scene setup. */
+    public boolean setupTrainingScene() {
+        return world.setupTrainingScene();
+    }
 }
