@@ -140,6 +140,28 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
         self.max_ticks      = int(config.get("max_episode_ticks", 6_000))
         self._tick          = 0
 
+        # N10: per-skill server-side timeout_ticks injected into every action
+        # before dispatch. The Java defaults (NAVIGATE/HARVEST = 6000 ticks)
+        # were tuned for vanilla TPS=20 (= 5 min wall) which becomes 20s wall
+        # at tick_warp 300 TPS. Under random initial-policy sampling almost
+        # every NAVIGATE picks an unreachable target and runs the full 6000
+        # ticks → 20s per env.step → train iter takes hours and Ray's
+        # sample_timeout_s fires before any fragment fills (the v13 "silent
+        # hang" symptom). 400 ticks at 300 TPS = ~1.3s — enough for the agent
+        # to traverse MAX_NAV_RANGE=32 blocks (~150 ticks walking) with slack.
+        # Override per-skill via env_config["skill_timeout_ticks"].
+        # Keys are gym skill_type ints from spaces.py (0=NAVIGATE 1=HARVEST
+        # 2=DEPOSIT_CHEST 3=SEARCH 4=WAIT 5=NOOP_BROADCAST). Only NAVIGATE,
+        # HARVEST, DEPOSIT_CHEST honor `timeout_ticks` server-side; SEARCH +
+        # WAIT compute duration from scalar_param × MAX_DURATION (~200 ticks).
+        default_skill_timeout = {0: 400, 1: 400, 2: 400}
+        self.skill_timeout_ticks: dict[int, int] = {
+            int(k): int(v) for k, v in {
+                **default_skill_timeout,
+                **dict(config.get("skill_timeout_ticks", {})),
+            }.items()
+        }
+
         # Pick port from worker index (defaults to first port for tests).
         ports = config["py4j_ports"]
         widx  = int(getattr(config, "worker_index",
@@ -297,6 +319,16 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
             self.skill_counters[agent] += 1
             invocation_id = f"{agent}-{self.skill_counters[agent]}"
             player_name = self.agent_id_to_player_name.get(agent, agent)
+            # N10: inject server-side timeout_ticks per skill_type so the
+            # Java executor doesn't burn 6000 ticks (20s wall at TPS=300) on
+            # a single failed NAVIGATE during random-policy sampling.
+            # Mutate a shallow copy so we don't poison the policy's dict.
+            try:
+                skill_type = int(np.asarray(act.get("skill_type", -1)).item())
+            except Exception:
+                skill_type = -1
+            if "timeout_ticks" not in act and skill_type in self.skill_timeout_ticks:
+                act = {**act, "timeout_ticks": int(self.skill_timeout_ticks[skill_type])}
             self.bridge.dispatch_skill(player_name, act, invocation_id)
             if int(act.get("should_broadcast", 0)) == 1 and np.asarray(
                     act.get("comm_target_mask", [0, 0, 0, 0])).any():
