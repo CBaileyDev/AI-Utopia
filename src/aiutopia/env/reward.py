@@ -129,17 +129,54 @@ def _delta_inventory(prev: dict[str, int], curr: dict[str, int]) -> dict[str, in
 
 
 def _inventory_from_obs(obs: dict) -> dict[str, int]:
-    """Reconstruct {item_id: count} dict from the obs slot arrays."""
+    """Reconstruct {item_id: count} dict from the obs slot arrays.
+
+    M1A defect surfaced during T21 v11: the obs space declares
+    `inv_slot_item_ids` as MultiDiscrete (numeric IDs), but this
+    function originally assumed strings like 'minecraft:oak_log'.
+    Now handles both: strings are split as before; ints/numpy-ints
+    map via _ITEM_ID_TO_NAME (Java-side ItemId table). Unknown int
+    IDs become 'item_{N}' — they won't match LOG_VALUE keys, so they
+    produce zero reward (silent), but the pipeline doesn't crash.
+
+    Until the int→name table is wired through from the Java side
+    (T-followup), real training will see zero positive reward for
+    gathering. See NEXT_SESSION.md N3 caveat.
+    """
     items = obs.get("inv_slot_item_ids", [])
     counts = obs.get("inv_slot_counts", [])
     out: dict[str, int] = {}
     for item, count in zip(items, counts):
-        if not item or count <= 0:
+        try:
+            cnt = int(count)
+        except (TypeError, ValueError):
+            cnt = 0
+        if cnt <= 0:
             continue
-        # Strip "minecraft:" prefix if present
-        key = item.split(":", 1)[-1]
-        out[key] = out.get(key, 0) + count
+        if isinstance(item, str):
+            if not item:
+                continue
+            key = item.split(":", 1)[-1]
+        else:
+            # int / numpy.int64 — name lookup via Java-aligned table
+            iid = int(item)
+            if iid == 0:                # canonical "no item" sentinel
+                continue
+            key = _ITEM_ID_TO_NAME.get(iid, f"item_{iid}")
+        out[key] = out.get(key, 0) + cnt
     return out
+
+
+# Minimal Java-side ItemId table — only items M1B cares about.
+# Real-world: this should be generated from the Java mod's
+# ItemIdTable.java at obs-builder boot via Py4J. T-followup.
+# Values are placeholder block state IDs; LOG_VALUE['oak_log']
+# must align with whatever Java emits for an oak_log item.
+_ITEM_ID_TO_NAME: dict[int, str] = {
+    # Populated empirically by the obs probe + Java logs. For M1B,
+    # any unknown ID becomes 'item_{N}' and produces zero reward.
+    # Once the mapping is verified, add: 17: "oak_log", etc.
+}
 
 
 def _gatherer_primary_signal(prev_inv: dict[str, int],
