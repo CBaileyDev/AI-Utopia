@@ -130,7 +130,14 @@ public class WorldOps {
             // Bake a solid grass floor and clear arena air above it
             cm.executeWithPrefix(src, "/fill 48 60 -64 80 64 -32 grass_block replace");
             cm.executeWithPrefix(src, "/fill 48 65 -64 80 80 -32 air replace");
-            cm.executeWithPrefix(src, "/tick rate 300.0");   // Carpet 1.21.1 wants float
+            // N12: dropped from 300 -> 60 TPS. At 300 TPS, two distinct
+            // concurrent-modification crashes were reproducible: CME in
+            // Lithium's forEachInBox during EntityPlayerMPFake tick, and
+            // AIOOBE in fastutil LongOpenHashSet.rehash during chunk tick.
+            // 60 TPS (3x vanilla speed) still gives a meaningful training
+            // throughput boost without exposing those races.
+            cm.executeWithPrefix(src, "/tick rate 60.0");
+
             return true;
         } catch (Exception e) {
             dev.aiutopia.mod.AiUtopiaMod.LOG.error(
