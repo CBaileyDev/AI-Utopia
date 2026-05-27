@@ -41,3 +41,13 @@ def test_gate_ignores_results_without_evaluation_metric() -> None:
     cb = EvalGateStopCallback()
     cb.on_train_result(algorithm=None, result={})
     assert not cb.gate_passed
+
+
+def test_m1_evaluation_scenario_callback_throttled() -> None:
+    from aiutopia.train.callbacks import M1EvalScenarioCallback
+    cb = M1EvalScenarioCallback(eval_interval=5)
+    result = {}
+    for _ in range(4):
+        cb.on_train_result(algorithm=None, result=result)
+    assert "eval_m1_oak_log_success_rate" not in (
+        result.get("env_runners", {}).get("episode_extra_stats", {}))

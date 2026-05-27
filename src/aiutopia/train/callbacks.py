@@ -98,3 +98,40 @@ class EvalGateStopCallback(RLlibCallback):
             # Tune stop dict watches custom_metrics/{milestone}/gate_passed
         else:
             result["custom_metrics"][f"{self.milestone}/gate_passed"] = 0.0
+
+
+class M1EvalScenarioCallback(RLlibCallback):
+    """Every `eval_interval` train iterations, run the 3 M1 fixed-seed
+    scenarios and emit aggregate success rate as
+    `episode_extra_stats[eval_m1_oak_log_success_rate]`."""
+
+    def __init__(self, *, eval_interval: int = 10,
+                  env_config: dict | None = None) -> None:
+        super().__init__()
+        self.eval_interval = eval_interval
+        self.env_config = env_config or {}
+        self._iter = 0
+
+    def on_train_result(self, *, algorithm, metrics_logger=None,
+                          result, **kwargs):
+        self._iter += 1
+        if self._iter % self.eval_interval != 0:
+            return
+        from aiutopia.train.scenario_runner import (
+            M1_SCENARIOS, run_scenario, aggregate_success_rate,
+        )
+        rl_module = algorithm.get_module("gatherer_policy")
+        results = []
+        for sc in M1_SCENARIOS:
+            try:
+                results.append(run_scenario(sc,
+                                              env_config=self.env_config,
+                                              rl_module=rl_module))
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "evaluation scenario %s failed: %s", sc.name, exc)
+        success_rate = aggregate_success_rate(results)
+        sampler = result.setdefault("env_runners", {})
+        stats = sampler.setdefault("episode_extra_stats", {})
+        stats["eval_m1_oak_log_success_rate"] = success_rate
