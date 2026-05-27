@@ -70,7 +70,11 @@ for i in 1 2 3 4; do
         echo "[setup] creating $INST"
         mkdir -p "$INST/mods" "$INST/world"
         cp "$PRODUCTION_DIR/fabric-server-launcher.jar" "$INST/"
-        for m in fabric-api fabric-carpet lithium ferritecore; do
+        # N11: lithium removed — its forEachInBox optimization is not
+        # concurrent-safe with Carpet fake players modifying entity lists
+        # mid-tick, crashes server with ConcurrentModificationException
+        # under tick warp. Vanilla server perf is fine for headless training.
+        for m in fabric-api fabric-carpet ferritecore; do
             cp "$PRODUCTION_DIR/mods/$m"-*.jar "$INST/mods/" 2>/dev/null || true
         done
         cp "$MOD_JAR" "$INST/mods/aiutopia-mod-0.0.0-m1b.jar"
