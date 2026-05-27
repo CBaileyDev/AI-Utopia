@@ -147,6 +147,22 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
         self.bridge = FabricBridge(port=ports[widx])
         self.bridge.open()
 
+        # N9: populate the module-level int→name table in reward.py from the
+        # Java side's ItemId registry (masked with & 0x3FF — same mask the obs
+        # builder uses). Without this, _inventory_from_obs falls back to
+        # "item_{N}" which never matches LOG_VALUE → identically zero primary
+        # reward for gathering. Done ONCE per env init (vanilla registry is
+        # immutable across the run).
+        try:
+            jmap = self.bridge.entry_point.getItemIdNameTable()
+            from aiutopia.env import reward as _rwd
+            _rwd._ITEM_ID_TO_NAME.update(
+                {int(k): str(jmap.get(k)) for k in jmap.keySet()}
+            )
+            log.info("N9 ItemId table loaded: %d entries", len(_rwd._ITEM_ID_TO_NAME))
+        except Exception as e:
+            log.warning("Could not fetch ItemIdNameTable from Java: %s", e)
+
         # M1-Training likely-to-break fix #1: per-worker AIUTOPIA_ROOT so 4
         # concurrent EnvRunners don't collide on the same identity.db and
         # Chroma collections. Each worker gets its own root suffixed with its

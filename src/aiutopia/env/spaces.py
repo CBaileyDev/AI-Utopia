@@ -8,7 +8,10 @@ from gymnasium.spaces import Box, Dict as DictSpace, Discrete, MultiBinary, Mult
 import numpy as np
 
 # Fixed constants — must agree with Java side (motor_module.encode_action).
-N_ITEMS         = 1024     # MC 1.21 item-id space (sparse OK; this is the cap)
+N_ITEMS         = 2048     # N9: contiguous remap via Java ItemIdTable (no
+                           # longer a sparse mod-1024 mask). Vanilla MC 1.21.1
+                           # ~1300 items; 2048 gives headroom + must match
+                           # ItemIdTable.N_ITEMS on the Java side.
 N_BIOMES        = 64
 INV_SLOTS       = 36
 GOAL_EMBED_DIM  = 512

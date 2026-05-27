@@ -96,4 +96,21 @@ public class Py4JEntryPoint {
     public boolean setupTrainingScene() {
         return world.setupTrainingScene();
     }
+
+    /** N9: returns the full masked item-id → simple-name table that the obs
+     *  builder uses for `inv_slot_item_ids` / `main_hand_item_id` / `off_hand_item_id`.
+     *
+     *  Python's reward.py (LOG_VALUE keys) is keyed by unprefixed item names
+     *  (e.g. "oak_log"), but the obs space emits int IDs (`rawId & 0x3FF`).
+     *  Without this table, _inventory_from_obs falls back to "item_{N}" which
+     *  never matches LOG_VALUE → identically zero primary reward.
+     *
+     *  Collision policy: with ~1300 vanilla items and 1024 buckets, ~25% of
+     *  buckets collide after `& 0x3FF`. We iterate `Registries.ITEM` in
+     *  registration order (its natural iteration order) and last-write-wins.
+     *  In practice the only items M1B needs (oak_log, dirt, stone, ...) have
+     *  small raw IDs and don't collide. WARNs are emitted for visibility. */
+    public java.util.Map<Integer, String> getItemIdNameTable() {
+        return dev.aiutopia.mod.obs.ItemIdTable.get().exportIdToPath();
+    }
 }

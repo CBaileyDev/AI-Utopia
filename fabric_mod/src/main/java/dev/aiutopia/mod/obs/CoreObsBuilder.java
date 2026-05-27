@@ -2,6 +2,7 @@ package dev.aiutopia.mod.obs;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
 import net.minecraft.server.MinecraftServer;
@@ -17,8 +18,10 @@ import static dev.aiutopia.mod.obs.ObsJsonWriter.*;
  *     as 1-element JSON arrays so Python's np.asarray gives shape (1,).
  *   - Discrete / MultiDiscrete fields (biome_id, main_hand_item_id,
  *     off_hand_item_id, inv_slot_item_ids) emit raw integer registry IDs,
- *     NOT registry-name strings. spaces.py expects ints in [0, N_ITEMS=1024)
- *     and [0, N_BIOMES=64); vanilla MC 1.21.1 item IDs fit; biome IDs are
+ *     NOT registry-name strings. spaces.py expects ints in [0, N_ITEMS=2048)
+ *     and [0, N_BIOMES=64); ints come from ItemIdTable (contiguous remap, NOT
+ *     `rawId & 0x3FF`), exposed to Python via Py4JEntryPoint#getItemIdNameTable;
+ *     biome IDs are
  *     mapped via biomeRawId() (the dynamic registry is per-world).
  *   - String fields agent_uuid + agent_name + role_id are auxiliary —
  *     Python's _normalize_raw uses them to derive role_one_hot and
@@ -26,6 +29,21 @@ import static dev.aiutopia.mod.obs.ObsJsonWriter.*;
  *
  *  goal_embedding comes from Python's GoalSpecAdapter — not emitted here. */
 public final class CoreObsBuilder {
+
+    /** Single source of truth for the obs-side item-id encoding.
+     *
+     *  N9: the M1A code used `Registries.ITEM.getRawId(item) & 0x3FF`, which
+     *  is catastrophic — vanilla MC 1.21.1 has ~1300 items, so the mask
+     *  silently overwrote oak_log / stone / cobblestone / every basic block
+     *  with `base+1024` items (spawn eggs). Agents literally could not see
+     *  oak_log in their inventory regardless of the reward path.
+     *
+     *  The fix: a contiguous remap via {@link ItemIdTable}, exported to
+     *  Python via {@link dev.aiutopia.mod.Py4JEntryPoint#getItemIdNameTable()}
+     *  so reward.py can translate obs ints back to LOG_VALUE keys. */
+    public static int maskedItemId(Item item) {
+        return ItemIdTable.get().idOf(item);
+    }
 
     public void populate(JsonObject obs, ServerPlayerEntity agent, MinecraftServer server) {
         // Auxiliary string fields — used by Python's _normalize_raw to derive
@@ -57,19 +75,18 @@ public final class CoreObsBuilder {
         JsonArray counts  = new JsonArray();
         for (int i = 0; i < 36; i++) {
             ItemStack s = inv.getStack(i);
-            int rawId = Registries.ITEM.getRawId(s.getItem());
             // Clamp to N_ITEMS=1024 (spaces.py). Modded item IDs may exceed
             // 1024 in a heavily-modded server; for the M1A vanilla baseline
             // we modulo as a safety net so we never blow the Discrete bound.
-            itemIds.add(rawId & 0x3FF);   // & 1023
+            itemIds.add(maskedItemId(s.getItem()));
             counts.add(s.getCount());
         }
         obs.add("inv_slot_item_ids", itemIds);
         obs.add("inv_slot_counts",   counts);
         obs.addProperty("main_hand_item_id",
-            Registries.ITEM.getRawId(agent.getMainHandStack().getItem()) & 0x3FF);
+            maskedItemId(agent.getMainHandStack().getItem()));
         obs.addProperty("off_hand_item_id",
-            Registries.ITEM.getRawId(agent.getOffHandStack().getItem()) & 0x3FF);
+            maskedItemId(agent.getOffHandStack().getItem()));
 
         // goal_ticks_left default 0 — Python's _normalize_raw replaces this with
         // the real ticks-left from the current Subgoal stub.
