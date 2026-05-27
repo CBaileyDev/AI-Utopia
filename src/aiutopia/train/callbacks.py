@@ -56,3 +56,45 @@ class ExploitHuntCallback(RLlibCallback):
         for key, value in episode_stats.items():
             if key.startswith("exploit_"):
                 result["custom_metrics"][f"exploit_hunt/{key}"] = float(value)
+
+
+class EvalGateStopCallback(RLlibCallback):
+    """Section 5.8 M1 evaluation gate: 80% success on collect-64-oak_log
+    over 3 consecutive evaluations.
+
+    Each evaluation arrives roughly once every `eval_interval` train iters
+    (M1EvalScenarioCallback emits one rate per N iters), so 3 consecutive
+    evaluations >= ~3*N train iters of sustained success.
+
+    On pass: writes `custom_metrics["M1/gate_passed"] = 1.0`. Tune's
+    stop dict watches that key and terminates the trial gracefully.
+    """
+
+    def __init__(self, *, milestone: str = "M1",
+                  success_metric: str = "eval_m1_oak_log_success_rate",
+                  threshold: float = 0.80,
+                  consecutive_required: int = 3) -> None:
+        super().__init__()
+        self.milestone           = milestone
+        self.success_metric      = success_metric
+        self.threshold           = threshold
+        self.consecutive_required = consecutive_required
+        self._recent: deque[float] = deque(maxlen=consecutive_required)
+        self.gate_passed = False
+
+    def on_train_result(self, *, algorithm, metrics_logger=None,
+                          result, **kwargs):
+        sampler = result.get("env_runners", result.get("sampler_results", {}))
+        rate = sampler.get("episode_extra_stats", {}).get(self.success_metric)
+        if rate is None:
+            return
+        self._recent.append(float(rate))
+        result.setdefault("custom_metrics", {})
+        result["custom_metrics"][f"{self.milestone}/gate_history"] = list(self._recent)
+        if (len(self._recent) == self.consecutive_required
+            and all(r >= self.threshold for r in self._recent)):
+            self.gate_passed = True
+            result["custom_metrics"][f"{self.milestone}/gate_passed"] = 1.0
+            # Tune stop dict watches custom_metrics/{milestone}/gate_passed
+        else:
+            result["custom_metrics"][f"{self.milestone}/gate_passed"] = 0.0
