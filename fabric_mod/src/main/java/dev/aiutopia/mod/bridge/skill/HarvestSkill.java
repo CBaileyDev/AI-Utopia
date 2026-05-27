@@ -85,7 +85,7 @@ public class HarvestSkill implements SkillExecutor {
     public SkillResult tick(ServerPlayerEntity agent, MinecraftServer server) {
         if (--ticksRemaining <= 0) {
             failureReason = "harvest timeout — broke " + brokenCount + " of " + cap;
-            return brokenCount > 0 ? SkillResult.COMPLETED : SkillResult.FAILED_TIMEOUT;
+            return SkillResult.FAILED_TIMEOUT;
         }
         if (brokenCount >= cap) {
             return SkillResult.COMPLETED;
@@ -129,11 +129,23 @@ public class HarvestSkill implements SkillExecutor {
     }
 
     private static Optional<BlockPos> findNearest(ServerWorld world, BlockPos origin, String substr) {
+        // Two-pass search: prefer ground-reachable matches (dy ∈ [-2, +1])
+        // to avoid stalling on canopy logs the agent can't jump to. If no
+        // ground-level match is in range, fall back to the full vertical range
+        // (caller treats that as a request to give up after `brokenCount > 0`).
+        Optional<BlockPos> ground = scanShell(world, origin, substr, -2, 1);
+        if (ground.isPresent()) return ground;
+        int radius = (int) Math.ceil(MAX_SEARCH_RADIUS);
+        return scanShell(world, origin, substr, -radius, radius);
+    }
+
+    private static Optional<BlockPos> scanShell(ServerWorld world, BlockPos origin,
+                                                  String substr, int dyMin, int dyMax) {
         int radius = (int) Math.ceil(MAX_SEARCH_RADIUS);
         BlockPos best = null;
         double   bestDist = Double.MAX_VALUE;
         for (int dx = -radius; dx <= radius; dx++) {
-            for (int dy = -radius; dy <= radius; dy++) {
+            for (int dy = dyMin; dy <= dyMax; dy++) {
                 for (int dz = -radius; dz <= radius; dz++) {
                     BlockPos p = origin.add(dx, dy, dz);
                     BlockState s = world.getBlockState(p);
