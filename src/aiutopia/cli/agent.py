@@ -130,11 +130,11 @@ def drive(
     invocation_id = f"manual-{int(time.time()*1000)}"
     with FabricBridge(port=py4j_port) as bridge:
         bridge.dispatch_skill(agent_name, action, invocation_id)
-        typer.echo(f"dispatched skill={skill} target={target} → {invocation_id}")
+        typer.echo(f"dispatched skill={skill} target={target} -> {invocation_id}")
         # Block on completion
         events = bridge.advance_tick_await_events(timeout_ms=timeout_ms)
         if not events:
-            typer.echo("timeout — no completion event arrived", err=True)
+            typer.echo("timeout - no completion event arrived", err=True)
             raise typer.Exit(code=1)
         for evt in events:
             typer.echo(_json.dumps(evt, indent=2))
