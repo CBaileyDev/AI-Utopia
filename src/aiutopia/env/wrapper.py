@@ -166,6 +166,20 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
             v: k for k, v in self.agent_id_to_player_name.items()
         }
 
+        # M1-Training T21 fix: under training, the wrapper must self-spawn
+        # its agents so each EnvRunner is self-sufficient (the manual
+        # `aiutopia agent spawn` CLI registers players with skin-pool names
+        # like "Frida" — that breaks reset_episode/dispatch which use gym
+        # ids like "gatherer_0"). Carpet's `/player spawn` silently no-ops
+        # if the name already exists.
+        if config.get("auto_spawn_agents", True):
+            for env_aid, player_name in self.agent_id_to_player_name.items():
+                role = env_aid.rsplit("_", 1)[0]
+                try:
+                    self.bridge.carpet_spawn(player_name, skin="", role=role)
+                except Exception:
+                    pass   # idempotent — already-spawned is OK
+
         # M1-Pipeline T16: per-agent ExploitDetector (5 rules from §5.3).
         self.exploit_detectors: dict[str, ExploitDetector] = {
             agent: ExploitDetector() for agent in self.agents_init
