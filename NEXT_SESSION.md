@@ -8,7 +8,26 @@
 
 142/142 unit tests pass. `aiutopia-mod-0.0.0-m1b.jar` is post-N12 rebuild, deployed to 5 mod dirs.
 
-**v16 may still be running** on PID 80302 (started 18:54). 4 Fabric instances on ports 25001-25004 / MC 25566-25569. Check with `Get-Process java,python | Where-Object { $_.Path -like '*Python311*' -or $_.ProcessName -eq 'java' }`. Let it cook overnight — at tick rate 60 each iter takes 10-15 min, gate convergence likely needs hundreds of iters.
+**No live processes — v16 killed after 21 min stall + diagnostic.**
+
+## ⚠️ N13 BLOCKER — tick-rate vs batch-size math is broken
+
+Thread dump on v16's Server thread confirmed it's alive and ticking at 60 TPS (parked at `MinecraftServer.runTasksTillTickEnd`, ~8% CPU). Not a deadlock — just running slowly. At tick rate 60, per-env-step latency is ~5-7s (vs ~1.4s at tick 300). For `train_batch_size=2048 / 4 workers = 512 steps/worker × 7s ≈ 60 min/iter`, but `sample_timeout_s=600s`. Workers can never deliver enough steps before Ray's timeout fires.
+
+**The trade-off:**
+- Tick 300: fast enough, **crashes** (N11/N12 — ConcurrentModificationException / ArrayIndexOutOfBoundsException with Carpet fake players)
+- Tick 60: stable, **too slow** for batch fill
+
+**First fix to try (smallest change):** shrink `train_batch_size` and tighten the rollout proportionally:
+```python
+# In src/aiutopia/train/config.py m1_gatherer_config defaults:
+train_batch_size=256,         # was 2048
+rollout_fragment_length=32,   # was 128
+# minibatch_size auto-recalculates to min(256, train_batch//8) = 32
+```
+With 256/4workers/32 = 2 fragments per worker per iter = ~3 min/iter at tick 60. Then ~100 iters to hit gate is ~5 hours wall — overnight feasible.
+
+**If batch=256 still times out**, raise `sample_timeout_s` to 3600s as a follow-up.
 
 **Goal this session:** Run T21 to convergence, hit the 80% eval gate, promote weights, tag `m1b-verified`. Then optionally start M2 brainstorming.
 
