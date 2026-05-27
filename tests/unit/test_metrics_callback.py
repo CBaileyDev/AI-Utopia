@@ -24,3 +24,16 @@ def test_callback_accepts_metrics_logger_kwarg() -> None:
     cb = AiUtopiaMetricsCallback()
     result = {"info": {"learner": {}}}
     cb.on_train_result(algorithm=None, metrics_logger=None, result=result)
+
+
+def test_exploit_hunt_callback_throttled() -> None:
+    from aiutopia.train.callbacks import ExploitHuntCallback
+    cb = ExploitHuntCallback(every_n_iters=3)
+    result = {"env_runners": {"episode_extra_stats": {"exploit_drop_spam": 0.5}}}
+    for i in range(1, 9):
+        result["custom_metrics"] = {}
+        cb.on_train_result(algorithm=None, result=result)
+        if i % 3 == 0:
+            assert "exploit_hunt/exploit_drop_spam" in result["custom_metrics"]
+        else:
+            assert "exploit_hunt/exploit_drop_spam" not in result["custom_metrics"]
