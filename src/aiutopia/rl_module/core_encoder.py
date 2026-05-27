@@ -45,6 +45,33 @@ def core_obs_flat_dim() -> int:
     return total
 
 
+def unflatten_role_obs(t: torch.Tensor, shape: tuple[int, ...]) -> torch.Tensor:
+    """Restore a flattened role-overlay obs tensor to its spatial shape.
+
+    Ray 2.55's ConnectorV2 flattens Dict obs values to (B, prod(shape)) before
+    passing them to the RLModule. Per-role encoders that need the spatial
+    structure (conv2d on a grid, patch encoder for pixel) must call this to
+    restore (B, *shape).
+
+    Idempotent — if `t` already has the spatial shape, returns it unchanged.
+
+    Examples:
+        >>> grid = unflatten_role_obs(obs["g_resource_grid"], (32, 32, 6))
+        >>> grid = grid.permute(0, 3, 1, 2).contiguous()       # (B, C, H, W)
+
+        >>> patch = unflatten_role_obs(obs["b_pixel_patch"], (64, 64, 3))
+        >>> patch = patch.permute(0, 3, 1, 2).contiguous()     # M2 builder
+    """
+    if t.ndim == 1 + len(shape):
+        return t                                                # already (B, *shape)
+    if t.ndim == 2 and t.shape[1] == int(np.prod(shape)):
+        return t.reshape(t.shape[0], *shape)                    # flattened (B, prod)
+    raise ValueError(
+        f"unflatten_role_obs: cannot reconcile tensor shape {tuple(t.shape)} "
+        f"with expected role obs shape (B, *{shape})"
+    )
+
+
 def flatten_core_obs_batched(obs: dict[str, torch.Tensor]) -> torch.Tensor:
     """Vectorized flatten: dict of (B, ...) tensors -> (B, D) float32 tensor.
 

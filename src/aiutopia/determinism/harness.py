@@ -97,11 +97,25 @@ def replay_with_rlmodule(rl_module, *, env_config: dict, seed: int = 1,
                 batched = {k: torch.as_tensor(np.asarray(v)).unsqueeze(0).to(device)
                            for k, v in agent_obs.items()}
                 state_in = {k: v.unsqueeze(0) for k, v in states[agent].items()}
-                with torch.no_grad():
-                    out = rl_module._forward_inference({
-                        Columns.OBS: batched,
-                        Columns.STATE_IN: state_in,
-                    })
+                try:
+                    with torch.no_grad():
+                        out = rl_module._forward_inference({
+                            Columns.OBS: batched,
+                            Columns.STATE_IN: state_in,
+                        })
+                except (RuntimeError, ValueError, KeyError) as exc:
+                    # T21 fix #3: surface the actual shapes that mismatched.
+                    # Most common cause: ConnectorV2 flattened obs in training
+                    # but our replay passes them un-flattened (or vice-versa).
+                    obs_shapes = {k: tuple(v.shape) for k, v in batched.items()}
+                    state_shapes = {k: tuple(v.shape) for k, v in state_in.items()}
+                    raise RuntimeError(
+                        f"determinism replay: rl_module._forward_inference "
+                        f"failed on agent={agent} tick={len(trace)}. "
+                        f"obs shapes: {obs_shapes}. "
+                        f"state shapes: {state_shapes}. "
+                        f"original: {type(exc).__name__}: {exc}"
+                    ) from exc
                 dist = out[Columns.ACTION_DIST_INPUTS][0]
                 action = _greedy_decode(dist)
                 actions[agent] = action

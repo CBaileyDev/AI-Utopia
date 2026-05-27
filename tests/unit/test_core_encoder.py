@@ -59,3 +59,23 @@ def test_core_encoder_module_param_count_reasonable() -> None:
     module = CoreEncoderModule(config={"core_hidden": [512, 256]})
     n_params = sum(p.numel() for p in module.parameters())
     assert 1_000_000 < n_params < 20_000_000
+
+
+def test_unflatten_role_obs_4d_passthrough() -> None:
+    from aiutopia.rl_module.core_encoder import unflatten_role_obs
+    t = torch.rand(4, 32, 32, 6)
+    assert unflatten_role_obs(t, (32, 32, 6)).shape == (4, 32, 32, 6)
+
+
+def test_unflatten_role_obs_flattened_reshape() -> None:
+    from aiutopia.rl_module.core_encoder import unflatten_role_obs
+    t = torch.rand(4, 32 * 32 * 6)
+    out = unflatten_role_obs(t, (32, 32, 6))
+    assert out.shape == (4, 32, 32, 6)
+
+
+def test_unflatten_role_obs_wrong_shape_raises() -> None:
+    from aiutopia.rl_module.core_encoder import unflatten_role_obs
+    t = torch.rand(4, 999)
+    with pytest.raises(ValueError, match="cannot reconcile"):
+        unflatten_role_obs(t, (32, 32, 6))
