@@ -30,12 +30,26 @@ class GathererRoleEncoder(nn.Module):
         )
 
     def forward(self, obs):
-        # obs values may arrive as (B, H, W, C) or (B*T, H, W, C); same op works
-        grid = obs["g_resource_grid"].permute(0, 3, 1, 2).contiguous()
+        # T21 fix #9: Ray 2.55's ConnectorV2 flattens Dict obs values to 2D
+        # (B, prod(shape)) before passing to the RLModule. Reshape grid back
+        # to (B, 32, 32, 6) when that happens. Unit tests construct 4D obs
+        # directly so they don't hit this — only real EnvRunner rollouts do.
+        grid = obs["g_resource_grid"]
+        if grid.ndim == 2:
+            grid = grid.reshape(-1, 32, 32, 6)
+        grid = grid.permute(0, 3, 1, 2).contiguous()
         grid_feat = self.grid_conv(grid)
-        nearest = obs["g_nearest_resources"].flatten(start_dim=1)
-        rich    = obs["g_richness_score"]
-        host    = obs["g_hostiles_nearby"].flatten(start_dim=1)
+
+        nearest = obs["g_nearest_resources"]
+        nearest = nearest.reshape(nearest.shape[0], -1)
+
+        rich = obs["g_richness_score"]
+        if rich.ndim == 1:
+            rich = rich.unsqueeze(-1)
+
+        host = obs["g_hostiles_nearby"]
+        host = host.reshape(host.shape[0], -1)
+
         flat    = torch.cat([nearest, rich, host], dim=-1)
         flat_feat = self.flat_mlp(flat)
         return torch.cat([grid_feat, flat_feat], dim=-1)
