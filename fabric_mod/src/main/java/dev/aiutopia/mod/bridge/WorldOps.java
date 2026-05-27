@@ -9,11 +9,20 @@ public class WorldOps {
     public void attachServer(MinecraftServer server) { this.server = server; }
     public void detachServer()                       { this.server = null;   }
 
-    /** Batched observation read — single JSON blob with every agent on
-     *  this env. M0 stub: returns "{}" so Python can parse it. */
+    /** §7.3 batched observation read — single JSON blob with every agent on
+     *  this env. Iterates AgentRegistry.snapshot(), composes per-agent obs
+     *  via ObservationBuilder. Skips agents that are not currently on the
+     *  server (e.g. dead, pre-spawn). */
     public String observationsAll() {
-        // TODO M1: assemble per-agent obs from world state + Carpet APIs.
-        return "{}";
+        if (server == null) return "{}";
+        com.google.gson.JsonObject root = new com.google.gson.JsonObject();
+        var builder = new dev.aiutopia.mod.obs.ObservationBuilder();
+        for (String name : dev.aiutopia.mod.agent.AgentRegistry.snapshot()) {
+            var player = server.getPlayerManager().getPlayer(name);
+            if (player == null) continue;   // not currently connected
+            root.add(name, builder.buildForAgent(player, server));
+        }
+        return root.toString();
     }
 
     /** Reset world to the given seed. M0 stub. */
