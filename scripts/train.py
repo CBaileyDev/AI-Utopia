@@ -59,6 +59,10 @@ def main() -> None:
     parser.add_argument("--max-iters", type=int, default=2000)
     parser.add_argument("--seed",       type=int, default=1)
     parser.add_argument("--evaluation-interval", type=int, default=10)
+    parser.add_argument("--num-env-runners", type=int, default=4,
+                        help="Ray EnvRunner workers (= # of Fabric instances)")
+    parser.add_argument("--num-envs-per-runner", type=int, default=1,
+                        help="envs per worker (1 keeps each env pinned to its own agent)")
     args = parser.parse_args()
 
     paths = Paths.from_env(); paths.ensure()
@@ -66,7 +70,11 @@ def main() -> None:
              object_store_memory=8 * 1024**3,
              _system_config={"object_spilling_threshold": 0.95})
 
-    cfg = m1_gatherer_config(seed=args.seed)
+    cfg = m1_gatherer_config(
+        seed=args.seed,
+        num_env_runners=args.num_env_runners,
+        num_envs_per_env_runner=args.num_envs_per_runner,
+    )
     env_config = cfg.env_config if hasattr(cfg, "env_config") else \
                   cfg.to_dict().get("env_config", {})
     cfg = cfg.callbacks(_make_callbacks_class(env_config, args.evaluation_interval))
