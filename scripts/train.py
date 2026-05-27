@@ -98,10 +98,12 @@ def main() -> None:
                 checkpoint_score_attribute="env_runners/episode_return_mean",
                 checkpoint_score_order="max",
             ),
-            stop={
-                "training_iteration":                       args.max_iters,
-                "custom_metrics/M1/gate_passed":            0.5,  # >= 0.5 = passed
-            },
+            # NOTE(T21 finding): Ray 2.55 doesn't expose custom_metrics/* as a
+            # Tune stop-criterion key path. The gate is still emitted into the
+            # result dict by EvalGateStopCallback for observability, but Tune
+            # itself only stops on training_iteration here. Use the
+            # m1b-evaluation-gate.sh script post-hoc to verify gate passage.
+            stop={"training_iteration": args.max_iters},
             verbose=1,
         ),
     )
