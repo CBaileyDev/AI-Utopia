@@ -32,15 +32,17 @@ def m1_gatherer_config(*,
                         num_envs_per_env_runner: int = 2,
                         max_episode_ticks: int = 12_000,
                         seed:              int = 1,
-                        # N3 v12 finding: skill execution is slow (~0.5s/step at
-                        # tick warp 300). With 4 workers × 1024 fragment, filling
-                        # 4096-step batch takes >2 min; sample_timeout_s=120 was
-                        # too tight. Raise to 600s + cap fragments at 128 so the
-                        # Learner gets partial samples sooner and surfaces issues
-                        # via metrics rather than timing out.
-                        rollout_fragment_length: int | str = 128,
-                        sample_timeout_s:        float     = 600.0,
-                        train_batch_size:        int       = 2048,
+                        # N13 finding (v16 thread dump): at tick rate 60 (post-N12
+                        # crash fix) per-env-step latency is ~5-7s (vs ~1.4s at
+                        # tick 300). For batch=2048/4 workers = 512 steps/worker
+                        # × 7s = ~60 min/iter, far exceeding sample_timeout_s.
+                        # Shrunk batch 2048→256 + fragment 128→32 so each iter
+                        # cycle is 256/(4*32)=2 fragments × ~7s = ~14s sampling,
+                        # batch fill ~1 min, iter ~3 min. Worse sample efficiency
+                        # but trains end-to-end at tick 60 stability.
+                        rollout_fragment_length: int | str = 32,
+                        sample_timeout_s:        float     = 1800.0,
+                        train_batch_size:        int       = 256,
                         ) -> PPOConfig:
     """Section 7.1 M1 single-agent gatherer PPO config (new API stack)."""
     register_aiutopia_env()
