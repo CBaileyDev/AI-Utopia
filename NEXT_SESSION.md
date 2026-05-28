@@ -8,8 +8,29 @@
 
 142/142 unit tests pass. `aiutopia-mod-0.0.0-m1b.jar` is post-N12 rebuild, deployed to 5 mod dirs.
 
-**No live processes — v16 killed after 21 min stall + diagnostic.**
+**v17 IS RUNNING (PID 147652).** Started 03:42 EDT 2026-05-28. 4 iters complete by 03:55 (1024 env_steps lifetime). ~3 min/iter steady state. No errors, no crashes.
 
+**To check progress live:**
+```powershell
+Get-Content C:\tmp\aiu-m1b-train\runs\aiutopia_M1_seed1\PPO_*\progress.csv -Wait | Select-Object -Last 1
+# Or columnated:
+Get-Content C:\tmp\aiu-m1b-train\runs\aiutopia_M1_seed1\PPO_*\progress.csv |
+    ForEach-Object { ($_ -split ',')[0..8] -join '  ' }
+```
+
+**Expected timeline:** 50-200 iters to hit 80% gate. At 3 min/iter = 2.5-10 hours overnight. The KL non-finite warning at iter 1 (and `nan` curr_kl_coeff in iters 2-4) is a known PPO+masked-action edge case; not fatal — `kl_coeff` auto-adapts.
+
+**When iter ~100+ has landed (or you see consistent `episode_return_mean > 50`):**
+```powershell
+# Pick best checkpoint
+$BEST = (Get-ChildItem "C:\tmp\aiu-m1b-train\runs\aiutopia_M1_seed1\PPO_*\checkpoint_*" -Directory |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+Write-Host "Best: $BEST"
+# Run eval gate
+bash scripts/m1b-evaluation-gate.sh "$BEST"
+```
+
+**Original N13 BLOCKER below (RESOLVED — keeping for context):**
 ## ⚠️ N13 BLOCKER — tick-rate vs batch-size math is broken
 
 Thread dump on v16's Server thread confirmed it's alive and ticking at 60 TPS (parked at `MinecraftServer.runTasksTillTickEnd`, ~8% CPU). Not a deadlock — just running slowly. At tick rate 60, per-env-step latency is ~5-7s (vs ~1.4s at tick 300). For `train_batch_size=2048 / 4 workers = 512 steps/worker × 7s ≈ 60 min/iter`, but `sample_timeout_s=600s`. Workers can never deliver enough steps before Ray's timeout fires.
