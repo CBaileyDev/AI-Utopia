@@ -48,11 +48,11 @@ def _gatherer_collected_64_oak_log(final_obs: dict) -> bool:
 
 
 M1_SCENARIOS: list[Scenario] = [
-    Scenario(name="m1_oak_log_seed_1", seed=1, max_ticks=1000,
+    Scenario(name="m1_oak_log_seed_1", seed=1, max_ticks=300,
               success=_gatherer_collected_64_oak_log),
-    Scenario(name="m1_oak_log_seed_2", seed=2, max_ticks=1000,
+    Scenario(name="m1_oak_log_seed_2", seed=2, max_ticks=300,
               success=_gatherer_collected_64_oak_log),
-    Scenario(name="m1_oak_log_seed_3", seed=3, max_ticks=1000,
+    Scenario(name="m1_oak_log_seed_3", seed=3, max_ticks=300,
               success=_gatherer_collected_64_oak_log),
 ]
 
