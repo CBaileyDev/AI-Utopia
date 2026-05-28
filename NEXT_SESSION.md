@@ -1,424 +1,107 @@
-# Next session runbook — M1B training to `m1b-verified` tag
+# Next Session Handoff — Post v20 Training Day
 
-**Resume point:** repo HEAD `27ff6cd`. M1B code-complete + **16** integration fixes:
-- 13 from prior sessions
-- **N10** (#50): wrapper injects skill `timeout_ticks=400` (Java default of 6000 = 20s wall at tick warp 300 → workers timed out before any sample landed)
-- **N11** (#51): removed lithium mod from training instances (`ConcurrentModificationException` in Lithium's `forEachInBox` during Carpet fake player tick at tick warp 300)
-- **N12** (#52): dropped tick rate from 300 to 60 (Lithium-removed didn't fix it; vanilla MC's fastutil `LongOpenHashSet.rehash` ALSO crashes under tick warp 300 with Carpet fake players. 60 TPS = 3× vanilla, training-viable, no crashes observed in 4+ min runtime)
+## Status as of 17:20
 
-142/142 unit tests pass. `aiutopia-mod-0.0.0-m1b.jar` is post-N12 rebuild, deployed to 5 mod dirs.
+- **v20 PPO training is RUNNING** in the background — iter ~20, started 14:30 (~2h 50m elapsed in v20)
+- 4 Fabric servers (PIDs visible via `Get-Process java`) on ports 25001-25004
+- v20 log: `Research/train-v20.log` — driver PID file: `Research/train-v20.log.pid`
+- Ray Tune trial dir: `runs/aiutopia_M1_seed1/PPO_aiutopia_minecraft_2d8eb_00000_0_2026-05-28_14-29-35/`
 
-**v17 IS RUNNING (PID 147652).** Started 03:42 EDT 2026-05-28. 4 iters complete by 03:55 (1024 env_steps lifetime). ~3 min/iter steady state. No errors, no crashes.
+## What got fixed this session (commit chain)
 
-**To check progress live:**
-```powershell
-Get-Content C:\tmp\aiu-m1b-train\runs\aiutopia_M1_seed1\PPO_*\progress.csv -Wait | Select-Object -Last 1
-# Or columnated:
-Get-Content C:\tmp\aiu-m1b-train\runs\aiutopia_M1_seed1\PPO_*\progress.csv |
-    ForEach-Object { ($_ -split ',')[0..8] -join '  ' }
+| Commit | Issue | Fix |
+|--------|-------|-----|
+| `694b44d` | N15+N16 — HARVEST silently fails | float-precision attractor in `HarvestSkill.java`, REACH 2.0→4.5, full WALK_PER_TICK, direct inventory insertion via `getDroppedStacks` + `offerOrDrop` |
+| `4a9bff0` | episodes never end | `max_episode_ticks` 12_000 → 2_000 |
+| `abe1c12` | N17 — eval scenarios crash | nested-dict obs batching in `scenario_runner.py` (action_mask is a dict not an ndarray); `max_episode_ticks` 2_000 → 300 |
+| `0c52bd4` | N18 — eval too expensive | `M1_SCENARIOS` max_ticks 1000 → 300 |
+
+End-to-end probe (`scripts/n14_reward_probe.py`) confirms reward signal: 6 oak_log per 6 env_steps, reward +11.78 in isolation.
+
+## Why training hasn't converged
+
+**Empirically observed**: across 3 training runs (v18, v19, v20), only 1 of 4 instances accumulates oak_log; the other 3 wander off and mine cobblestone. Inventory probes at iter ~10-15:
+
+```
+inst-1: 64 cobblestone, 0 oak_log
+inst-2: 39 cobblestone, 0 oak_log
+inst-3:  1 cobblestone + 2 coal, 0 oak_log
+inst-4:  8 oak_log + 9 cobblestone  ← only one on-task
 ```
 
-**Expected timeline:** 50-200 iters to hit 80% gate. At 3 min/iter = 2.5-10 hours overnight. The KL non-finite warning at iter 1 (and `nan` curr_kl_coeff in iters 2-4) is a known PPO+masked-action edge case; not fatal — `kl_coeff` auto-adapts.
+PPO averages gradients across all rollouts. With 3/4 envs producing cobblestone-mining trajectories (LOG_VALUE 0.091/block) and 1/4 producing oak_log trajectories (LOG_VALUE 1.000/block), the policy mixes the two attractors. Per-iter gradient updates are dilute and slow to converge on oak_log specifically.
 
-**When iter ~100+ has landed (or you see consistent `episode_return_mean > 50`):**
-```powershell
-# Pick best checkpoint
-$BEST = (Get-ChildItem "C:\tmp\aiu-m1b-train\runs\aiutopia_M1_seed1\PPO_*\checkpoint_*" -Directory |
-    Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
-Write-Host "Best: $BEST"
-# Run eval gate
-bash scripts/m1b-evaluation-gate.sh "$BEST"
+**Root mechanism**: the seeded 8-log ring depletes within ~50-150 env steps. After that, the agent has zero oak_log signal until `reset_episode` re-places the ring. Meanwhile NAVIGATE can take the agent 32 blocks away per skill call, so the agent often ends up underground (`y=40-65` from spawn `y=66`) mining cobblestone before the ring resets.
+
+## Training rate / instability issues seen
+
+- **Per-step time degrades over ~5-9 iters**: starts at 1-2s, grows to 8-15s. Cause unknown — possibly Java GC pressure (instances hit ~1.5GB of 2GB heap), possibly Carpet fake-player state, possibly chunk-load fragmentation as agents wander to new chunks.
+- **NaN KL ~40-50% of iters**: training continues but ~half of gradient steps are no-ops. Iter 13 KL = 0.01 (converging) but iter 14 NaN. Pattern oscillates throughout.
+- **Iter pace ~500-600s after warmup**: at this rate, 200 iters = ~33h. We got ~20 iters in 3h of v20.
+
+## Recommended next-session priorities
+
+### High value, low risk
+
+1. **Constrain agents to the arena.** The 32-block NAVIGATE range lets agents escape the seeded ring. Two cheap options:
+   - In `WorldOps.resetEpisode`, add `/forceload add` for the arena chunks only, so unloaded chunks elsewhere don't load (won't stop movement but reduces load cost).
+   - In `wrapper.py step()`, after each step check if `agent.position.y < 60` or distance from origin > 32, and force a `reset_episode` if so. This pulls agents back to the ring quickly and dominates the on-policy buffer with oak_log trajectories.
+
+2. **Bump Java heap.** Edit `scripts/launch-training-instances.sh:67` from `-Xmx2g` to `-Xmx4g`. May fix the per-step time degradation.
+
+3. **Run a full N18 e2e eval test.** `scripts/n18_eval_e2e_test.py` (added this session) tests scenario_runner against a random AiUtopiaRoleRLModule on instance-1. **Stop v20 first** (it competes for instance-1) and run:
+   ```
+   PYTHONPATH=src py -3.11 -u scripts/n18_eval_e2e_test.py
+   ```
+   Expected: all 3 scenarios complete in ~22min total, success_rate=0 (random policy). Proves the N17 fix end-to-end.
+
+### Medium value
+
+4. **Stop v20 cleanly to trigger `checkpoint_at_end`.** `train.py` line 102 has `checkpoint_at_end=True` — sending SIGTERM to the driver PID should save the current weights. Then load + run scenarios manually.
+
+5. **Investigate why `metrics_num_episodes_for_smoothing=200`** in `config.py:122`. With max_episode_ticks=300 and 64 steps/env/iter, we'd need 200×300/64 = ~940 iters of training before the smoothing window fills — way longer than M1B targets. Lower to 20.
+
+### Low value, high effort
+
+6. Custom MetricsCallback that publishes `episode_return_mean` to a top-level CSV column (we couldn't find it directly in 106 columns of `progress.csv` — only buried in `result.json`).
+
+## Files added this session
+
+- `scripts/n14_reward_probe.py` — HARVEST reward sanity probe (6 oak_log, +11.78 reward verified)
+- `scripts/n15_py4j_diag.py`, `scripts/n15b_payload_diag.py`, `scripts/n15c_bisect.py` — dispatch path diagnostics (proved dispatch works)
+- `scripts/n16_verify.py`, `scripts/n16b_probe_state.py` — REACH_RADIUS attractor reproduction
+- `scripts/n17_eval_repro.py` — pinpoints `action_mask` as the numpy.object_ source
+- `scripts/n18_eval_e2e_test.py` — standalone scenario_runner test against random policy
+
+## Files modified this session
+
+- `fabric_mod/src/main/java/dev/aiutopia/mod/bridge/skill/HarvestSkill.java` (N16+N16c)
+- `fabric_mod/src/main/java/dev/aiutopia/mod/bridge/skill/DepositChestSkill.java` (N16b)
+- `src/aiutopia/env/wrapper.py` (N16, N14 logging upgrade)
+- `src/aiutopia/env/reward.py` (N14 eager seed)
+- `src/aiutopia/train/scenario_runner.py` (N17 dict batching, N18 max_ticks)
+- `src/aiutopia/train/config.py` (N17 max_episode_ticks)
+- `fabric_mod/gradle.properties` (version → 0.0.0-m1c-n16c)
+
+## How to stop v20 cleanly when ready
+
+```bash
+DRIVER_PID=$(cat /c/Users/Carte/OneDrive/Desktop/AiUtopia/Research/train-v20.log.pid)
+# Tune's signal handler should trigger checkpoint_at_end on SIGTERM
+powershell -Command "Stop-Process -Id $DRIVER_PID"
 ```
 
-**Original N13 BLOCKER below (RESOLVED — keeping for context):**
-## ⚠️ N13 BLOCKER — tick-rate vs batch-size math is broken
+Final v20 checkpoint will be under `runs/aiutopia_M1_seed1/.../checkpoint_*/`.
 
-Thread dump on v16's Server thread confirmed it's alive and ticking at 60 TPS (parked at `MinecraftServer.runTasksTillTickEnd`, ~8% CPU). Not a deadlock — just running slowly. At tick rate 60, per-env-step latency is ~5-7s (vs ~1.4s at tick 300). For `train_batch_size=2048 / 4 workers = 512 steps/worker × 7s ≈ 60 min/iter`, but `sample_timeout_s=600s`. Workers can never deliver enough steps before Ray's timeout fires.
+## How to manually evaluate the trained policy
 
-**The trade-off:**
-- Tick 300: fast enough, **crashes** (N11/N12 — ConcurrentModificationException / ArrayIndexOutOfBoundsException with Carpet fake players)
-- Tick 60: stable, **too slow** for batch fill
+After v20 stops with a saved checkpoint:
 
-**First fix to try (smallest change):** shrink `train_batch_size` and tighten the rollout proportionally:
 ```python
-# In src/aiutopia/train/config.py m1_gatherer_config defaults:
-train_batch_size=256,         # was 2048
-rollout_fragment_length=32,   # was 128
-# minibatch_size auto-recalculates to min(256, train_batch//8) = 32
-```
-With 256/4workers/32 = 2 fragments per worker per iter = ~3 min/iter at tick 60. Then ~100 iters to hit gate is ~5 hours wall — overnight feasible.
-
-**If batch=256 still times out**, raise `sample_timeout_s` to 3600s as a follow-up.
-
-**Goal this session:** Run T21 to convergence, hit the 80% eval gate, promote weights, tag `m1b-verified`. Then optionally start M2 brainstorming.
-
-**Supervision mode:** USER BABYSITS the run (1-2 hours of TensorBoard watching, Ctrl-C on convergence). No custom auto-stopper installed; training will otherwise run to `training_iteration == 2000`. See N7.5 if you want to fix the Tune stop-key path for M2.
-
----
-
-## ⚠️ N10 BLOCKER — known v13 hang to debug FIRST
-
-The last training attempt (v13) silently hung on the first `env.step()`. Symptoms:
-- Workers spawned cleanly
-- env.reset() executed (oak_logs placed at 16:18:27 across all 4 Fabric instances)
-- Then **complete silence** — no skill execution, no errors, no progress for 5+ minutes
-- Python worker CPU went idle (53s total across 26 procs)
-
-**Most likely cause:** The N9 obs builder refactor at commit `c79afc5` — `CoreObsBuilder.maskedItemId()` now delegates to the new `ItemIdTable.idOf()` singleton. Possible failure modes:
-1. `ItemIdTable` singleton init blocks indefinitely on first call from obs path
-2. `idOf()` throws on a specific item type silently swallowed by the obs builder
-3. The new mapping produces an obs the Python wrapper's `_decode_obs` can't parse
-
-**Debug recipe (do this BEFORE relaunching training):**
-
-```bash
-# 1. Launch ONE Fabric instance + one agent + try a single skill manually
-JDK_HOME=/c/Users/Carte/jdk/jdk-21.0.11+10 ./scripts/launch-training-instances.sh
-# (the script needs only 1 instance for the probe, but easier to launch all 4)
+from ray.rllib.algorithms.algorithm import Algorithm
+algo = Algorithm.from_checkpoint("runs/aiutopia_M1_seed1/PPO_.../checkpoint_xxx")
+module = algo.get_module("gatherer_policy")
+# then run scripts/n18_eval_e2e_test.py but pass module= from the checkpoint
 ```
 
-```powershell
-# 2. Probe: run a single HARVEST skill via the existing aiutopia agent drive CLI
-cd C:\Users\Carte\OneDrive\Desktop\AiUtopia
-$env:PYTHONPATH = "src"
-$env:AIUTOPIA_ROOT = "C:\tmp\aiu-n10-probe"
-py -3.11 -m aiutopia.cli.app agent spawn --role gatherer --py4j-port 25001
-py -3.11 -m aiutopia.cli.app agent drive --agent-name <NAME_FROM_SPAWN> `
-    --skill 1 --target 0 --dx 0.5 --dy 0.0 --dz 0.5 --scalar 0.5 `
-    --py4j-port 25001 --timeout-ms 30000
-```
-Expected: completion event JSON printed within ~5s. If hangs >30s: skill dispatch path is broken (probably ItemIdTable.init or the obs builder).
-
-```powershell
-# 3. If skill drive works manually, the issue is in the WRAPPER's env.step path.
-# Run the N2.5 reward sanity probe (same script from NEXT_SESSION.md Phase 2.5)
-# but watch which step it stalls on. The first call should be env.reset().
-```
-
-```powershell
-# 4. If both probes hang, the issue is in observationsAll() (the obs builder is
-# blocking). Inspect with:
-py -3.11 -c "from aiutopia.env.bridge import FabricBridge
-import time
-with FabricBridge(port=25001) as b:
-    t = time.time()
-    obs = b.observations_all()
-    print(f'observationsAll took {time.time()-t:.2f}s, keys={list(obs.keys())[:5]}')"
-# Expect: <1s. If >5s: ItemIdTable lookup is slow.
-```
-
-**Fix candidates (in priority order):**
-- Add debug log in `ItemIdTable.idOf()` to count calls + time
-- If `ItemIdTable` builds its mapping lazily on first call, switch to eager init at mod boot
-- If `idOf()` does a linear scan, add a HashMap cache
-- If the regression is real but unclear, `git revert c79afc5` and reintroduce N9 fix differently (keep the obs builder unchanged, just expose the existing table via Py4J)
-
-**Once N10 is fixed**, resume below from Phase 1.
-
----
-
-## Phase 1 — Pre-flight (5 min) — Task N1
-
-```powershell
-cd C:\Users\Carte\OneDrive\Desktop\AiUtopia
-git log --oneline -1                           # expect: 4ca6bd8
-$env:PYTHONPATH = "src"
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"
-py -3.11 -m pytest tests/unit -q | Select-Object -Last 3   # expect: 142 passed
-nvidia-smi | Select-Object -First 8            # expect: RTX 4080, CUDA OK
-& "C:\Users\Carte\jdk\jdk-21.0.11+10\bin\java.exe" --version   # expect: openjdk 21.0.11
-Get-ChildItem server-runtime\mods\aiutopia-mod-*.jar | Select-Object Name, Length
-```
-
-Stop here if any check fails.
-
----
-
-## Phase 2 — Bootstrap 4 training instances (3 min) — Task N2
-
-```bash
-# Git Bash
-cd "/c/Users/Carte/OneDrive/Desktop/AiUtopia"
-JDK_HOME=/c/Users/Carte/jdk/jdk-21.0.11+10 ./scripts/launch-training-instances.sh
-# Wait ~5s. Verify all 4 servers booted:
-for i in 1 2 3 4; do tail -1 "server-runtime/training/instance-$i/instance-$i.log"; done
-# Expect "Done (X.Xs)!" on each line.
-```
-
-Then run setup (forceloads chunks + flattens the grass arena per commit 95c1d55):
-
-```powershell
-cd C:\Users\Carte\OneDrive\Desktop\AiUtopia
-$env:PYTHONPATH = "src"
-py -3.11 -c "from aiutopia.env.bridge import FabricBridge
-for port in (25001, 25002, 25003, 25004):
-    with FabricBridge(port=port) as b:
-        ok = b.setup_training_scene()
-        print(f'port {port}: setup={ok}')"
-```
-
-Expect: 4 lines, all `setup=True`.
-
-**Note:** the wrapper's `auto_spawn_agents` flag (commit eeee2de) means train.py spawns its own `gatherer_0` agents per worker. You do **not** need to run `aiutopia agent spawn` manually anymore.
-
----
-
-## Phase 2.5 — Reward sanity check (5 min) — Task N2.5
-
-Quick insurance before committing to a long training run. Drive one agent through a scripted skill sequence and verify the reward histogram is sane (non-zero variance, no NaN, magnitudes in `[-2, +5]` ballpark).
-
-```powershell
-cd C:\Users\Carte\OneDrive\Desktop\AiUtopia
-$env:PYTHONPATH = "src"
-$env:AIUTOPIA_ROOT = "C:\tmp\aiu-m1b-probe"
-py -3.11 -c @"
-import json, numpy as np
-from aiutopia.env.wrapper import AiUtopiaPettingZooEnv
-env = AiUtopiaPettingZooEnv({
-    'stage': 1, 'active_roles': ['gatherer'],
-    'seed_strategy': 'fixed_easy', 'py4j_ports': [25001],
-    'tick_warp': True, 'max_episode_ticks': 50,
-    'per_worker_seed_offset': False, 'enable_memory_writes': False,
-    'aiutopia_root_per_worker': False,
-})
-obs, info = env.reset(seed=1)
-rewards = []
-for tick in range(30):
-    actions = {}
-    for agent_id in obs:
-        a = env.action_space(agent_id).sample()
-        actions[agent_id] = a
-    obs, rew, term, trunc, info = env.step(actions)
-    for r in rew.values():
-        rewards.append(float(r))
-    if all(term.values()) or all(trunc.values()):
-        break
-env.close()
-r = np.asarray(rewards)
-print(f'reward stats: n={len(r)} mean={r.mean():.3f} std={r.std():.3f} min={r.min():.3f} max={r.max():.3f}')
-print(f'histogram (5 bins):')
-hist, edges = np.histogram(r, bins=5)
-for i, h in enumerate(hist):
-    print(f'  [{edges[i]:.2f}, {edges[i+1]:.2f}]: {"#"*h} ({h})')
-print('NaN check:', np.isnan(r).any())
-print('Inf check:', np.isinf(r).any())
-"@
-```
-
-**Pass criteria:**
-- `n == 30` (or close — episode terminations OK)
-- `std > 0` (not a constant signal)
-- `NaN check: False`, `Inf check: False`
-- `min >= -10` and `max <= +20` (sanity bounds)
-
-If any check fails, fix `compute_reward_stage_1` in `src/aiutopia/env/reward.py` before launching N3. A silent `0` mean+std with no NaN means the reward is computing but is constant — usually a sign the agent isn't actually triggering the events that produce reward (check that the obs delta logic in reward.py sees the obs changing tick-to-tick).
-
----
-
-## Phase 3 — Train (hours, mostly hands-off) — Task N3
-
-```powershell
-cd C:\Users\Carte\OneDrive\Desktop\AiUtopia
-$env:AIUTOPIA_ROOT = "C:\tmp\aiu-m1b-train"
-$env:PYTHONPATH = "src"
-$env:CUBLAS_WORKSPACE_CONFIG = ":4096:8"
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD = "1"
-py -3.11 scripts\train.py --milestone M1 --max-iters 2000 `
-    --evaluation-interval 50 --num-env-runners 4 --num-envs-per-runner 1 `
-    --num-learners 0 --seed 1
-```
-
-In a second shell:
-
-```powershell
-tensorboard --logdir C:\tmp\aiu-m1b-train\runs --port 6006
-# open http://localhost:6006 in browser
-```
-
-**Healthy run signals (first 30 min):**
-- log line `Trial PPO_aiutopia_minecraft_XXX started with configuration:` within 2 min
-- `training_iteration: 1` completes within ~5 min of launch
-- `iter rate >= 1/min` thereafter (each iter samples 4096 env steps across 4 workers at tick rate 300)
-- `episode_return_mean` is non-zero (positive **or** negative) by iter ~50
-- Fabric `instance-N.log` shows `Changed the block at` lines on each `env.reset()` — not "Could not set"
-
-**Verify the 4 per-review-fix invariants in the first 5 min:**
-
-```powershell
-# (1) Per-worker AIUTOPIA_ROOT actually created (4 separate dirs):
-Get-ChildItem C:\tmp\aiu-m1b-train_w* -Directory | Select-Object Name, LastWriteTime
-# Expect: aiu-m1b-train_w0, _w1, _w2, _w3 — each with its own identity.db
-Get-ChildItem C:\tmp\aiu-m1b-train_w0\identity.db -ErrorAction SilentlyContinue
-
-# (2) Checkpoints actually being written (cadence verification):
-Get-ChildItem "C:\tmp\aiu-m1b-train\runs\aiutopia_M1_seed1\PPO_*\checkpoint_*" -ErrorAction SilentlyContinue | Select-Object Name, LastWriteTime
-# Expect: at least one checkpoint_NNNNNN/ directory by ~iter 10. If nothing
-# appears past iter 50, Ray 2.55's default cadence may be "end only" —
-# pass --checkpoint-frequency to train.py or hack RunConfig.checkpoint_config.
-
-# (3) Custom metrics actually in TensorBoard:
-# Open http://localhost:6006/, expand "custom_metrics" scope —
-# should see gatherer_policy/entropy, gatherer_policy/vf_loss, M1/gate_history.
-# If the scope is empty, the RLlibCallback isn't piping to the new metrics_logger
-# in Ray 2.55 — see N7.5.
-
-# (4) /clear race fixed — Fabric instance-1.log should NOT have
-# "No player was found" lines after the initial spawn await:
-Select-String "No player was found" C:\Users\Carte\OneDrive\Desktop\AiUtopia\server-runtime\training\instance-1\instance-1.log | Measure-Object | Select-Object Count
-# Expect: 0 (or very few — at most one per worker on auto-spawn race)
-```
-
-**Stop criterion:** the configured Tune stop is `training_iteration == 2000`. The `EvalGateStopCallback` still writes `M1/gate_passed` into `result["custom_metrics"]` but Ray 2.55 doesn't pipe that to Tune's stop-dict key path (T21 fix #9). Either: (a) watch TensorBoard for `eval_m1_oak_log_success_rate >= 0.80` for 3 consecutive evals, then Ctrl-C, (b) let it run all 2000 iters and pick the best checkpoint at the end.
-
----
-
-## Phase 4 — Conditional: intervene if non-convergent — Task N4
-
-If `episode_return_mean` stays at 0 (or strongly negative) past iter 200, apply diagnostics in this order:
-
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| Fabric log shows oak_logs placed each reset, but obs `g_resource_grid` is all zeros | Obs builder doesn't see logs at Y=66 — grid origin mismatch | Probe with `bridge.observations_all()` and inspect `g_resource_grid[6][6]`. Adjust obs builder Y window or place logs at Y=65 instead. |
-| Logs placed, obs sees them, but agent never moves | NAVIGATE skill broken or action mask blocking | Check `skill_counters` in worker logs. Run `aiutopia agent drive --agent gatherer_0 --skill 0 ... --py4j-port 25001` manually. |
-| Agent moves a bit then stalls forever | Canopy-stall on remaining log debris (M1A T3 known) | Widen log ring radius to 6-10 in `WorldOps.java:resetEpisode` (`r = 6 + epRand.nextInt(5)`), rebuild, redeploy, restart Fabric. |
-| `entropy` collapsing to ~0 by iter 50 | Policy over-confident too early | In `train/config.py` bump `entropy_coeff` 0.01 → 0.05 and `kl_coeff` 0.2 → 0.5. |
-| `vf_loss` exploding (>1e4) | PBRS overflow on large inventories | Cap PBRS contribution; lower `lr` 3e-4 → 1e-4. |
-
-Each intervention requires: Ctrl-C → fix → relaunch Phase 3. Java fixes require rebuild + Fabric restart (Phase 2 again).
-
----
-
-## Phase 5 — Eval gate + promotion (15 min) — Task N5
-
-When training stops (auto at iter 2000, or manual Ctrl-C after convergence):
-
-```powershell
-cd C:\Users\Carte\OneDrive\Desktop\AiUtopia
-$BEST_CKPT = (Get-ChildItem "C:\tmp\aiu-m1b-train\runs\aiutopia_M1_seed1\PPO_*\checkpoint_*" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
-Write-Host "Best checkpoint: $BEST_CKPT"
-bash scripts/m1b-evaluation-gate.sh "$BEST_CKPT"
-```
-
-Expected output: 3 determinism replays each marked PASS, then `section 5.10 checklist: PASS (5 gates)`, then `promoted gatherer: v0 -> v1`.
-
-If determinism replays raise a `RuntimeError: determinism replay: rl_module._forward_inference failed ...` with shape diagnostic (from likely-to-break fix #3) — read the obs/state shapes in the error, locate the mismatch, patch `replay_with_rlmodule` to match.
-
-If checklist Gate 2 (scenario success < 80%) fails: training did not converge. Either continue training (`scripts/train.py --max-iters 4000 ...`) or revisit Phase 4.
-
----
-
-## Phase 6 — Tag `m1b-verified` (5 min) — Task N6
-
-Append M1B section to `M0_PROGRESS.md` per plan T22 step 3:
-
-```markdown
-## M1-Training Progress
-**Status:** Complete. Tag `m1b-verified`.
-### Empirical results (T21)
-- Env steps to gate: <FILL>
-- Wall-clock: <FILL>
-- Final entropy: <FILL>, vf_loss: <FILL>, kl: <FILL>
-- Gatherer weights at: `<paths.weights_dir>/gatherer/v1/`
-- Deployment ID: <FILL>
-- Determinism: argmax_div=<FILL>, L2=<FILL>
-### Integration fixes applied during T21 (vs plan v2)
-1. CheckpointConfig.checkpoint_frequency deprecated → removed
-2. CheckpointConfig.checkpoint_at_end deprecated → removed
-3. ray.train.RunConfig strips Tune kwargs → use ray.tune.RunConfig
-4. num_learners=1 crashes on Windows (libuv) → --num-learners 0
-5. flush_comm_batch missing _to_python recursion
-6. Py4J auto_convert=True needed on GatewayParameters
-7. Wrapper auto-spawns own Carpet agents (manual CLI agents broke gym-id mapping)
-8. resetEpisode requires forceloaded chunks + flat-grass arena
-9. ConnectorV2 flattens Dict obs → role_encoder uses unflatten_role_obs helper
-10. custom_metrics/M1/gate_passed not a Tune stop key path in Ray 2.55 → drop from stop dict
-```
-
-Then:
-
-```bash
-git add M0_PROGRESS.md
-git commit -m "docs(M0_PROGRESS): M1-Training complete — first trained gatherer + 10 integration fixes (M1-Training T22)"
-git tag -a m1b-verified -m "M1-Training: PPO config + RLModule + training driver + 4-instance Fabric topology + promotion CLI + determinism on real weights; first gatherer weights at weights_dir/gatherer/v1/"
-git tag -l
-```
-
-Expected tags: `m0`, `m0-source`, `m0-verified`, `m1a-verified`, `m1b-verified`.
-
----
-
-## Phase 6.5 — Resume training after a crash (5 min) — failure path
-
-If training dies mid-run (Ray worker OOM, machine reboot, Ctrl-C without convergence, electricity glitch), you can pick up from the last checkpoint instead of restarting from scratch.
-
-**Locate the last good checkpoint:**
-```powershell
-$LAST_CKPT = (Get-ChildItem "C:\tmp\aiu-m1b-train\runs\aiutopia_M1_seed1\PPO_*\checkpoint_*" `
-              -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
-Write-Host "Resume from: $LAST_CKPT"
-```
-
-**Restore the Tuner and continue:**
-```powershell
-$env:AIUTOPIA_ROOT = "C:\tmp\aiu-m1b-train"; $env:PYTHONPATH = "src"
-$env:CUBLAS_WORKSPACE_CONFIG = ":4096:8"
-py -3.11 -c @"
-from ray import tune
-tuner = tune.Tuner.restore(
-    path=r'C:\tmp\aiu-m1b-train\runs\aiutopia_M1_seed1',
-    trainable='PPO',
-    restart_errored=True,
-)
-results = tuner.fit()
-"@
-```
-
-**Caveats:**
-- Restore requires the original `trainable='PPO'` + the same env registration to still exist. Re-run Phase 2 (launch Fabric + bootstrap) first so the 4 instances are up before resuming.
-- Restore preserves the random seed sequence but not the per-EnvRunner random state — minor divergence is expected.
-- If the restore itself errors with "checkpoint format mismatch," the Ray version may have changed since the checkpoint was written — fall back to launching fresh and accept the lost iters.
-
----
-
-## Phase 7 — M2 brainstorming (open-ended) — Task N7
-
-Once M1B is tagged, brainstorm M2 scope. Key open questions:
-
-1. **Cross-policy weight sharing.** Plan v2 explicitly punted on this — `MultiRLModuleSpec.additional_module_specs` doesn't exist in Ray 2.55. Options: (a) accept that each role policy has its own copy of CoreEncoder/SharedBackbone/CTDECritic (cheap memory-wise: ~3M params × 4 roles = 12M, still tiny), (b) implement a custom MultiRLModule subclass that shares weights at the learner update step, (c) defer to M3+.
-2. **BuilderRoleEncoder pixel patch.** Per spec §4.4 the builder needs a pixel view of the construction site. Approaches: (a) Iris/Sodium offscreen framebuffer (Java mod work — complex), (b) software raycaster that reads chunk data and produces a synthetic 64×64×3 RGB patch (no GPU rendering, deterministic).
-3. **Stage-2 reward + curriculum.** Spec §5.1 has a curriculum decay schedule. Test it on solo gatherer first to validate the curriculum mechanism, then add builder.
-4. **BULK_FARMING exploit.** Cross-agent inventory transfer is the M2-new exploit. Add to ExploitDetector at env-wrapper level (it currently has per-agent rules only).
-
-Output of Phase 7: a M2 brainstorm document at `docs/superpowers/specs/<date>-m2-builder-design.md`. Not yet a plan — brainstorm first, plan after the design is approved.
-
----
-
-## Known caveats carried into next session
-
-- **Forceload no-op edge case.** `/forceload add` reported "No chunks were marked" on a fresh boot — chunks at the arena boundary may not be held resident. In practice the agent's spawn-area chunks are kept loaded by player proximity, but if an episode lets the agent wander to the arena edge it could find a chunk hole. If this bites: add explicit `world.getChunkManager().getChunk(cx, cz, ChunkStatus.FULL, true)` calls in `setupTrainingScene` Java to force-generate the chunks at boot.
-- **First-reset /clear race.** The wrapper's auto-spawn fires before the player has joined the server, so the first `/clear gatherer_0` after auto-spawn reports "No player was found". Subsequent resets work. Currently not blocking (rewards begin from the second reset). Fix: add 200ms sleep in `FabricBridge.carpet_spawn` or have the bridge await the `PlayerJoinEvent`.
-- **`RLModule(config=...)` deprecation warning.** Ray 2.55 prefers `RLModule(observation_space=, action_space=, ...)`. Our config currently uses the older path via `RLModuleSpec`. Cosmetic — will become a hard error in a future Ray version.
-
----
-
-## Estimated time for the full session
-- **Pre-flight (N1):** 5 min
-- **Bootstrap (N2):** 3 min
-- **Reward sanity check (N2.5):** 5 min
-- **Training to convergence (N3):** **1-2 hours of babysitting** + however long the wall-clock takes (no auto-stopper, you Ctrl-C on convergence)
-- **Eval gate (N5):** 15 min
-- **Tag (N6):** 5 min
-- **M2 brainstorming (N7):** open-ended (1-3 hours for first design pass)
-- **Tune stop-key path investigation (N7.5):** 30 min (post-tag, defer if M1B done)
-
-**Critical-path total to `m1b-verified`:** ~half a day of wall-clock with focused 1-2h babysitting window. If reward sanity check (N2.5) fails OR canopy issue triggers an N4 intervention, add 1-2 hours per iteration.
-
-## Re-review delta vs the v1 chain
-
-Per the user's pre-implementation review:
-- Added N2.5 (reward sanity check) as a 5-min insurance step before N3.
-- Pre-N3 code fixes committed at `e979748` for per-worker AIUTOPIA_ROOT (SQLite contention prevention) and 200ms join-await in `carpet_spawn` (silences /clear race).
-- N3 now has explicit invariant-verification checks (per-worker dirs exist, checkpoints write, custom_metrics in TB, no /clear races).
-- N4 reframed from "sequel of N3" to "conditional interrupt during N3".
-- Added Phase 6.5 (resume-from-crash via `tune.Tuner.restore()`).
-- Added N7.5 (post-M1B Tune stop-key path investigation) — feeds M2's auto-stopper.
+Or use the existing `aiutopia.cli.promote_weights` CLI (T16/T17) once the checkpoint exists.
