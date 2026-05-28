@@ -415,7 +415,29 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
                 env_meta=env_meta,
             )
             term[agent]  = died_this_tick
-            trunc[agent] = self._tick >= self.max_ticks
+            # N19-followup: also truncate when the agent strays out of the
+            # seeded arena. v18/v19/v20 inventory probes consistently showed
+            # only 1 of 4 instances accumulating oak_log — the other 3
+            # NAVIGATEd out of the 8-log ring (spawn at 64.5/66/-47.5,
+            # logs within 7 blocks horizontally at y=66) and ended up
+            # mining cobblestone at y=40-55 underground. With LOG_VALUE
+            # cobblestone=0.091 vs oak_log=1.000, the cobblestone-mining
+            # trajectories still produced positive reward, splitting the
+            # policy gradient between two reward attractors and preventing
+            # convergence on the M1B goal. Hard-bound the agent to the
+            # arena box (±24b horizontally from spawn, y>=60) so episodes
+            # that wander get terminated quickly and reset_episode pulls
+            # the agent back to the ring. This narrows the on-policy
+            # buffer to oak_log-adjacent trajectories.
+            agent_pos = new_obs.get(agent, {}).get("position", None)
+            out_of_bounds = False
+            if agent_pos is not None and len(agent_pos) >= 3:
+                dx = float(agent_pos[0]) - 64.5
+                dz = float(agent_pos[2]) - (-47.5)
+                y  = float(agent_pos[1])
+                if (abs(dx) > 24.0) or (abs(dz) > 24.0) or (y < 60.0):
+                    out_of_bounds = True
+            trunc[agent] = (self._tick >= self.max_ticks) or out_of_bounds
             info[agent]  = {
                 "skill_completion":   completion,
                 "exploit_penalties":  [(n.value, p) for n, p in exploit_penalties],

@@ -106,8 +106,15 @@ PROPS
     fi
     (
       cd "$INST"
+      # N19-followup: bumped -Xmx 2g -> 4g. v20 instances spent
+      # significant time near the 2g cap (~1.5g working set) and the
+      # per-step time degraded from ~1.5s to ~12s over 7-9 iters,
+      # likely due to G1 GC pressure once heap hit 75% live. 4g gives
+      # headroom for both the player chunks the agent loads and the
+      # ItemEntity buildup from mining-style HARVEST cycles. -Xms also
+      # raised so the heap doesn't need to grow into the new ceiling.
       nohup java -Daiutopia.py4j.port=$PY4J_PORT \
-                  -Xms1g -Xmx2g -XX:+UseG1GC \
+                  -Xms2g -Xmx4g -XX:+UseG1GC \
                   -jar fabric-server-launcher.jar nogui \
                   > "instance-$i.log" 2>&1 &
       echo $! > "instance-$i.pid"

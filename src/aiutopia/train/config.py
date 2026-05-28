@@ -131,7 +131,14 @@ def m1_gatherer_config(*,
         )
         .resources(num_cpus_for_main_process=2)
         .reporting(
-            metrics_num_episodes_for_smoothing=200,
+            # N19-followup: was 200. With max_episode_ticks=300 and
+            # 64 env_steps/env/iter (4 envs × 32 fragment), we'd need
+            # ~940 training iters before the 200-episode smoothing
+            # window fills — far longer than M1B targets (~100-200 iters
+            # to converge). Lowered to 20 so episode_return_mean
+            # populates within the first few iters that produce
+            # episode terminations.
+            metrics_num_episodes_for_smoothing=20,
             keep_per_episode_custom_metrics=True,   # T10 reads exploit_* stats
         )
         .checkpointing(
