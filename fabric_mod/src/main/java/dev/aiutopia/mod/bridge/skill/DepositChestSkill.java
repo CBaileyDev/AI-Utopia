@@ -25,7 +25,11 @@ import java.util.Optional;
 public class DepositChestSkill implements SkillExecutor {
 
     private static final double MAX_CHEST_RADIUS = 8.0;
-    private static final double REACH_RADIUS     = 2.0;
+    // N16b: same float-precision attractor bug HarvestSkill had — bumped
+    // 2.0 -> 4.5 (vanilla creative reach) and switched to full WALK_PER_TICK
+    // (no shrinking step).
+    private static final double REACH_RADIUS     = 4.5;
+    private static final double REACH_RADIUS_SQ  = REACH_RADIUS * REACH_RADIUS;
     private static final double WALK_PER_TICK    = 4.3 / 20.0;
 
     private BlockPos chestPos;
@@ -57,12 +61,12 @@ public class DepositChestSkill implements SkillExecutor {
         if (depositDone) return SkillResult.COMPLETED;
         Vec3d center = Vec3d.ofCenter(chestPos);
         Vec3d here   = agent.getPos();
-        double dist  = here.distanceTo(center);
-        if (dist > REACH_RADIUS) {
+        // N16b: squared compare + full WALK_PER_TICK to dodge the
+        // shrinking-step attractor (see HarvestSkill N16b comment).
+        if (here.squaredDistanceTo(center) > REACH_RADIUS_SQ + 1e-3) {
             Vec3d dir = center.subtract(here).normalize();
-            double step = Math.min(WALK_PER_TICK, dist - REACH_RADIUS);
             agent.setYaw((float) Math.toDegrees(Math.atan2(-dir.x, dir.z)));
-            agent.move(MovementType.SELF, dir.multiply(step));
+            agent.move(MovementType.SELF, dir.multiply(WALK_PER_TICK));
             return SkillResult.RUNNING;
         }
         ServerWorld world = (ServerWorld) agent.getWorld();

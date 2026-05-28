@@ -1,15 +1,20 @@
 package dev.aiutopia.mod.bridge.skill;
 
 import com.google.gson.JsonObject;
+import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
 import net.minecraft.entity.MovementType;
+import net.minecraft.item.ItemStack;
 import net.minecraft.registry.Registries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.event.GameEvent;
 
+import java.util.List;
 import java.util.Optional;
 
 /** §4.2 HARVEST: locate the nearest block whose registry name CONTAINS the
@@ -41,14 +46,36 @@ import java.util.Optional;
 public class HarvestSkill implements SkillExecutor {
 
     private static final double MAX_SEARCH_RADIUS = 16.0;
-    private static final double REACH_RADIUS      = 2.0;
+    // N16b: with REACH=3.0, the collision attractor at dist≈3.0+ε still
+    // pinned the agent (`step = min(WALK, dist-3.0)` shrunk to ~2e-4 b/tick
+    // because the agent's bbox tangents the log column at horizontal 0.8
+    // from log center, giving 3D dist = sqrt(0.64+2.25+remaining_dz²) that
+    // floats just above 3.0 for the second-nearest log of the ring).
+    // Bumped 3.0 -> 4.5 (vanilla creative reach is ~5 blocks — bedrock
+    // creative players can break a log from 4.5 away). Combined with the
+    // `step = WALK_PER_TICK` (no-shrink) fix below, this eliminates the
+    // attractor entirely: agent always walks full speed and vanilla AABB
+    // collision stops it at the right horizontal position; reach check
+    // then succeeds because 4.5 generously covers any collision-pinned pos.
+    private static final double REACH_RADIUS      = 4.5;
+    private static final double REACH_RADIUS_SQ   = REACH_RADIUS * REACH_RADIUS;
     private static final double WALK_PER_TICK     = 4.3 / 20.0;
     private static final int    MAX_QUANTITY      = 64;
+
+    // N16: no-progress watchdog. If the agent fails to make detectable
+    // progress toward currentTarget for this many ticks while currentTarget
+    // is set, abandon it and rescan. If findNearest returns the same block
+    // we just abandoned, return FAILED_TIMEOUT with a clear reason.
+    private static final int    STALL_TICK_BUDGET = 20;
+    private static final double STALL_DIST_EPSILON_SQ = 1e-4;
 
     private String targetSubstr;
     private int    cap;
     private int    brokenCount = 0;
     private BlockPos currentTarget;
+    private BlockPos lastAbandonedTarget;     // N16
+    private Vec3d  lastPos;                   // N16
+    private int    stuckTicks;                // N16
     private long   ticksRemaining;
     private int    clipped;
     private String failureReason = "";
@@ -98,28 +125,96 @@ public class HarvestSkill implements SkillExecutor {
                 failureReason = "no '" + targetSubstr + "' within " + MAX_SEARCH_RADIUS + " blocks";
                 return SkillResult.IMMEDIATE_FAILURE;
             }
-            currentTarget = found.get();
+            BlockPos cand = found.get();
+            // N16: if findNearest picks the same block we just abandoned for
+            // being unreachable, don't loop on it forever — fail clearly.
+            if (lastAbandonedTarget != null && cand.equals(lastAbandonedTarget)) {
+                failureReason = "harvest stalled — only reachable target ("
+                    + cand + ") cannot be approached within REACH_RADIUS="
+                    + REACH_RADIUS;
+                return SkillResult.FAILED_TIMEOUT;
+            }
+            currentTarget = cand;
+            lastPos       = agent.getPos();
+            stuckTicks    = 0;
         }
         Vec3d targetCenter = Vec3d.ofCenter(currentTarget);
         Vec3d here = agent.getPos();
-        double dist = here.distanceTo(targetCenter);
-        if (dist > REACH_RADIUS) {
-            // Move toward it via vanilla collision-aware movement
+        // N16: use squared distance with a small epsilon so float-precision
+        // edges (dist == 2.0 + 1 ULP from the geometric attractor where the
+        // agent's bbox tangents the log's column) don't trigger the
+        // shrinking-step infinite stall.
+        double distSq = here.squaredDistanceTo(targetCenter);
+        if (distSq > REACH_RADIUS_SQ + 1e-3) {
+            // N16: no-progress watchdog. If pos hasn't changed measurably
+            // since last tick, count toward stall budget; on budget exhaust,
+            // abandon this target and rescan (lastAbandonedTarget prevents
+            // immediate re-selection on the next tick).
+            if (lastPos != null && here.squaredDistanceTo(lastPos) < STALL_DIST_EPSILON_SQ) {
+                stuckTicks++;
+                if (stuckTicks >= STALL_TICK_BUDGET) {
+                    lastAbandonedTarget = currentTarget;
+                    currentTarget = null;
+                    stuckTicks = 0;
+                    return SkillResult.RUNNING;
+                }
+            } else {
+                stuckTicks = 0;
+            }
+            lastPos = here;
+            // N16b: ALWAYS use full WALK_PER_TICK. The old shrinking-step
+            // formula `step = min(WALK, dist - REACH_RADIUS)` produces
+            // sub-1e-3 b/tick steps whenever collision pins the agent at
+            // dist ≈ REACH_RADIUS + ε — re-creating the precision attractor
+            // bug at any radius value. With full walk speed, vanilla AABB
+            // collision stops the agent at the natural geometric limit;
+            // overshoot is impossible because the *next* tick's reach
+            // check sees dist <= REACH_RADIUS and enters the break branch.
             Vec3d dir = targetCenter.subtract(here).normalize();
-            double step = Math.min(WALK_PER_TICK, dist - REACH_RADIUS);
             float yaw = (float) Math.toDegrees(Math.atan2(-dir.x, dir.z));
             agent.setYaw(yaw);
-            agent.move(MovementType.SELF, dir.multiply(step));
+            agent.move(MovementType.SELF, dir.multiply(WALK_PER_TICK));
             return SkillResult.RUNNING;
         }
-        // Within reach — break the block (drops items naturally)
+        // Within reach — break the block and DIRECTLY transfer drops into
+        // the agent's inventory. The old `world.breakBlock(pos, true, agent)`
+        // path relied on the Carpet fake player auto-pickup'ing the ItemEntity
+        // that breakBlock spawns at the block's center — but with the bumped
+        // REACH_RADIUS=4.5 (needed to escape the float-precision attractor),
+        // the agent stops 3-4 blocks AWAY from the log when it breaks, well
+        // outside vanilla's ~1.5b auto-pickup radius. Result: drops spawn,
+        // never get picked up, despawn after 100s, and reward never fires
+        // because `_inventory_from_obs` stays empty. The N16c fix bypasses
+        // entity-form drops entirely: compute drops via loot table, insert
+        // directly into the agent's inventory, then air-out the block.
         BlockState state = world.getBlockState(currentTarget);
         if (!Registries.BLOCK.getId(state.getBlock()).toString().contains(targetSubstr)) {
-            // Target changed under us (e.g., someone else broke it). Clear and re-scan.
+            // Target changed under us (already broken, race with another
+            // agent, etc.). Clear and re-scan.
             currentTarget = null;
             return SkillResult.RUNNING;
         }
-        world.breakBlock(currentTarget, true, agent);
+        // 1. Compute drops via the block's loot table (oak_log → 1 oak_log).
+        //    breakingEntity=agent lets loot tables that key on entity (eg
+        //    looting/silk-touch) work correctly when tools are added later.
+        List<ItemStack> drops = Block.getDroppedStacks(
+            state, world, currentTarget,
+            state.hasBlockEntity() ? world.getBlockEntity(currentTarget) : null,
+            agent, ItemStack.EMPTY);
+        // 2. Insert each stack into the agent's inventory. offerOrDrop is
+        //    the right method: it tries to merge into existing stacks first,
+        //    fills empty slots, and only spawns an ItemEntity for excess
+        //    that won't fit (i.e. only if the inventory is full).
+        for (ItemStack drop : drops) {
+            agent.getInventory().offerOrDrop(drop);
+        }
+        agent.getInventory().markDirty();
+        // 3. Replace the block with air + emit the standard break event so
+        //    listeners (particle/sound, sculk sensors, etc.) still fire.
+        world.setBlockState(currentTarget, Blocks.AIR.getDefaultState(),
+            Block.NOTIFY_ALL);
+        world.syncWorldEvent(2001, currentTarget, Block.getRawIdFromState(state));
+        world.emitGameEvent(agent, GameEvent.BLOCK_DESTROY, currentTarget);
         brokenCount++;
         currentTarget = null;
         if (brokenCount >= cap) {

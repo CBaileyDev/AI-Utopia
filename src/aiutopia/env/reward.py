@@ -167,15 +167,80 @@ def _inventory_from_obs(obs: dict) -> dict[str, int]:
     return out
 
 
-# Minimal Java-side ItemId table — only items M1B cares about.
-# Real-world: this should be generated from the Java mod's
-# ItemIdTable.java at obs-builder boot via Py4J. T-followup.
-# Values are placeholder block state IDs; LOG_VALUE['oak_log']
-# must align with whatever Java emits for an oak_log item.
+# Java-side ItemId table — Python-side mirror of the contiguous mapping
+# emitted by `dev.aiutopia.mod.obs.ItemIdTable` and shipped to Python by
+# `Py4JEntryPoint.getItemIdNameTable()`. The wrapper updates this dict
+# at env init from the live Java side (the authoritative source); the
+# eager seed below is the **N14 defensive fallback** so reward shaping
+# still works if:
+#   (a) the wrapper's update path silently no-ops (e.g. log filtering
+#       hides the failure during training, see N14),
+#   (b) downstream code imports `reward` without ever touching the
+#       FabricBridge (unit tests, offline reward replays),
+#   (c) the Py4J connection is unavailable but a checkpoint's actions
+#       are being scored against a replay buffer.
+# Values were probed from a live MC 1.21.1 server with the current mod
+# build (commit 0a5a6e5) — see scripts/probe_item_id_table.py. The
+# in-process Java fetch overwrites/augments these entries at env init.
 _ITEM_ID_TO_NAME: dict[int, str] = {
-    # Populated empirically by the obs probe + Java logs. For M1B,
-    # any unknown ID becomes 'item_{N}' and produces zero reward.
-    # Once the mapping is verified, add: 17: "oak_log", etc.
+    # core blocks
+    0: "air",
+    1: "stone",
+    27: "grass_block",
+    28: "dirt",
+    35: "cobblestone",
+    36: "oak_planks",
+    56: "bedrock",
+    57: "sand",
+    61: "gravel",
+    64: "iron_ore",
+    132: "oak_log",
+    291: "torch",
+    299: "chest",
+    300: "crafting_table",
+    302: "furnace",
+    303: "ladder",
+    357: "glass_pane",
+    711: "oak_door",
+    # food + raw materials
+    800: "apple",
+    803: "coal",
+    805: "diamond",
+    811: "iron_ingot",
+    815: "gold_ingot",
+    848: "stick",
+    854: "wheat",
+    855: "bread",
+    881: "porkchop",
+    882: "cooked_porkchop",
+    909: "water_bucket",
+    988: "beef",
+    989: "cooked_beef",
+    990: "chicken",
+    991: "cooked_chicken",
+    1097: "carrot",
+    # tools (wooden / stone / iron)
+    818: "wooden_sword",
+    820: "wooden_pickaxe",
+    821: "wooden_axe",
+    822: "wooden_hoe",
+    823: "stone_sword",
+    825: "stone_pickaxe",
+    826: "stone_axe",
+    827: "stone_hoe",
+    833: "iron_sword",
+    835: "iron_pickaxe",
+    836: "iron_axe",
+    837: "iron_hoe",
+    # armor
+    856: "leather_helmet",
+    857: "leather_chestplate",
+    858: "leather_leggings",
+    859: "leather_boots",
+    864: "iron_helmet",
+    865: "iron_chestplate",
+    866: "iron_leggings",
+    867: "iron_boots",
 }
 
 

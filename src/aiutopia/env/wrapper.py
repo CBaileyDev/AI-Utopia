@@ -58,7 +58,12 @@ log = logging.getLogger(__name__)
 _AGENT_UUID_EMBED_DIM = 384
 _ROLE_ONE_HOT_DIM     = 4
 _ROLE_INDEX = {"gatherer": 0, "builder": 1, "farmer": 2, "defender": 3}
-_REACH_RADIUS_BLOCKS  = 2.0   # match HarvestSkill.REACH_RADIUS / DepositChestSkill
+_REACH_RADIUS_BLOCKS  = 4.5   # N16b: bumped 3.0->4.5 to match HarvestSkill/
+                              # DepositChestSkill REACH_RADIUS (vanilla creative
+                              # reach). The 3.0 value re-created the float-precision
+                              # attractor at a different radius — Java side now uses
+                              # full WALK_PER_TICK + 4.5 to eliminate it entirely.
+                              # Action mask uses this to gate HARVEST availability.
 
 
 def _agent_uuid_embed(uuid_str: str) -> np.ndarray:
@@ -169,21 +174,42 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
         self.bridge = FabricBridge(port=ports[widx])
         self.bridge.open()
 
-        # N9: populate the module-level int→name table in reward.py from the
-        # Java side's ItemId registry (masked with & 0x3FF — same mask the obs
-        # builder uses). Without this, _inventory_from_obs falls back to
-        # "item_{N}" which never matches LOG_VALUE → identically zero primary
-        # reward for gathering. Done ONCE per env init (vanilla registry is
-        # immutable across the run).
+        # N9 / N14: populate the module-level int→name table in reward.py
+        # from the Java side's ItemId registry. The mapping is the contiguous
+        # one emitted by `dev.aiutopia.mod.obs.ItemIdTable` (NOT the old
+        # `rawId & 0x3FF` scheme) and is exposed by
+        # `Py4JEntryPoint.getItemIdNameTable()`. Without this, the reward
+        # function falls back to the static eager seed in `reward.py` —
+        # complete for LOG_VALUE coverage but missing the long tail of
+        # items the obs builder may emit.
+        #
+        # N14 finding: the original `log.info(...)` here was getting
+        # filtered out by Ray's default log routing (workers don't print
+        # INFO to the parent train.log), which led a previous session to
+        # incorrectly conclude the update was silently failing. The dict
+        # WAS populating; the log line just wasn't visible. Upgraded to
+        # WARNING so future audits can confirm by tailing train.log.
         try:
             jmap = self.bridge.entry_point.getItemIdNameTable()
             from aiutopia.env import reward as _rwd
+            before = len(_rwd._ITEM_ID_TO_NAME)
             _rwd._ITEM_ID_TO_NAME.update(
                 {int(k): str(jmap.get(k)) for k in jmap.keySet()}
             )
-            log.info("N9 ItemId table loaded: %d entries", len(_rwd._ITEM_ID_TO_NAME))
+            after = len(_rwd._ITEM_ID_TO_NAME)
+            log.warning(
+                "N9/N14 ItemId table loaded from Java (port=%d): %d entries "
+                "(eager-seed=%d, added=%d)",
+                ports[widx], after, before, after - before,
+            )
         except Exception as e:
-            log.warning("Could not fetch ItemIdNameTable from Java: %s", e)
+            log.warning(
+                "N9/N14 could not fetch ItemIdNameTable from Java (port=%d): %s "
+                "— falling back to module-level eager seed (%d entries)",
+                ports[widx], e,
+                __import__("aiutopia.env.reward", fromlist=["_ITEM_ID_TO_NAME"])
+                  ._ITEM_ID_TO_NAME.__len__(),
+            )
 
         # M1-Training likely-to-break fix #1: per-worker AIUTOPIA_ROOT so 4
         # concurrent EnvRunners don't collide on the same identity.db and
