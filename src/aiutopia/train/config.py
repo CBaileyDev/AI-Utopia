@@ -30,7 +30,14 @@ def m1_gatherer_config(*,
                         py4j_ports:        tuple[int, ...] = (25001, 25002, 25003, 25004),
                         num_env_runners:   int = 4,
                         num_envs_per_env_runner: int = 2,
-                        max_episode_ticks: int = 12_000,
+                        # N16-followup: pre-N16, env.step took ~5-7s and 12_000
+                        # ticks would have meant 16-23h per episode (no episode
+                        # ever ended → episode_return_mean stayed undefined).
+                        # Post-N16, env.step is ~0.15s, so 12_000 = ~30min/ep
+                        # still wasteful. Eval gate measures "64 oak_log within
+                        # 1000 env steps", so 2000 gives the policy 2x slack
+                        # for learning without dragging the on-policy buffer.
+                        max_episode_ticks: int = 2_000,
                         seed:              int = 1,
                         # N13 finding (v16 thread dump): at tick rate 60 (post-N12
                         # crash fix) per-env-step latency is ~5-7s (vs ~1.4s at
