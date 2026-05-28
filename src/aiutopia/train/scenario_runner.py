@@ -77,12 +77,21 @@ def run_scenario(scenario: Scenario, *,
         states = {agent: _move_state_to_device(rl_module.get_initial_state(), device)
                   for agent in obs}
 
+        def _batch_value(v):
+            """N17: recursively add batch dim. The obs space contains nested
+            dicts (`action_mask` has `skill_type` / `target_per_skill` /
+            `comm_payload` sub-arrays); the original `torch.as_tensor(
+            np.asarray(v))` crashes on those because `np.asarray(dict)`
+            produces a 0-dim object array torch can't ingest."""
+            if isinstance(v, dict):
+                return {k: _batch_value(vv) for k, vv in v.items()}
+            return torch.as_tensor(np.asarray(v)).unsqueeze(0).to(device)
+
         for _ in range(scenario.max_ticks):
             actions = {}
             new_states = {}
             for agent_id, agent_obs in obs.items():
-                batched = {k: torch.as_tensor(np.asarray(v)).unsqueeze(0).to(device)
-                           for k, v in agent_obs.items()}
+                batched = {k: _batch_value(v) for k, v in agent_obs.items()}
                 # State must be batched: (B, H) -> our state dict gives (H,);
                 # add batch dim before passing in.
                 state_in = {k: v.unsqueeze(0) for k, v in states[agent_id].items()}

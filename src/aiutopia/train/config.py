@@ -30,14 +30,19 @@ def m1_gatherer_config(*,
                         py4j_ports:        tuple[int, ...] = (25001, 25002, 25003, 25004),
                         num_env_runners:   int = 4,
                         num_envs_per_env_runner: int = 2,
-                        # N16-followup: pre-N16, env.step took ~5-7s and 12_000
-                        # ticks would have meant 16-23h per episode (no episode
-                        # ever ended → episode_return_mean stayed undefined).
-                        # Post-N16, env.step is ~0.15s, so 12_000 = ~30min/ep
-                        # still wasteful. Eval gate measures "64 oak_log within
-                        # 1000 env steps", so 2000 gives the policy 2x slack
-                        # for learning without dragging the on-policy buffer.
-                        max_episode_ticks: int = 2_000,
+                        # N17 finding: with `max_episode_ticks=2000` and the
+                        # 8-log seeded ring placed at episode start, the agent
+                        # depletes the ring in the first ~50-150 env steps and
+                        # then spends the remaining 1850+ steps with zero
+                        # oak_log signal — v18 inventory probes confirmed only
+                        # 1 of 4 instances accumulated oak_log past 22 (the
+                        # other 3 wandered off and mined cobblestone/deepslate).
+                        # Lowered to 300 so the wrapper's reset_episode keeps
+                        # re-placing the ring frequently enough that the on-
+                        # policy buffer is dominated by oak_log-relevant
+                        # trajectories. Eval gate is unchanged (scenarios cap
+                        # at 1000 ticks per Scenario.max_ticks).
+                        max_episode_ticks: int = 300,
                         seed:              int = 1,
                         # N13 finding (v16 thread dump): at tick rate 60 (post-N12
                         # crash fix) per-env-step latency is ~5-7s (vs ~1.4s at
