@@ -126,7 +126,10 @@ def m1_gatherer_config(
                 {
                     # M2: the POLICY drives instance-selection + blind-explore.
                     "decision_core": True,
-                    "arena_mode": "clusters",   # 2 clusters, >perception gap
+                    # "mixed": alternate trees / randomized-clusters per episode so
+                    # the policy generalizes across layouts (not single-geometry
+                    # overfit). randomize_layout already varies the seed per episode.
+                    "arena_mode": "mixed",
                     "arena_half": 34.0,         # roam far enough to reach cluster B
                     "distance_shaping": True,   # PBRS guides the blind-explore hop
                 }

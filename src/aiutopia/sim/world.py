@@ -125,6 +125,10 @@ class SimWorld:
         self.inventory = {}
         self.tick = 0
 
+        # "mixed" (training): alternate trees / randomized-clusters by seed parity so
+        # the policy generalizes across BOTH layouts instead of overfitting one geometry.
+        if arena_mode == "mixed":
+            arena_mode = "clusters" if (int(seed) % 2 == 1) else "trees"
         rng = _JavaRandom(seed)
         bases = (
             self._cluster_bases(rng) if arena_mode == "clusters" else self._tree_grid_bases(rng)
@@ -168,16 +172,29 @@ class SimWorld:
 
     @staticmethod
     def _cluster_bases(rng: _JavaRandom) -> list[tuple[int, int]]:
-        """16 trunk bases in two 8-trunk clusters: A around the spawn (visible),
-        B ~22 blocks south (beyond the 16-block perception) -> the gap forces a
-        blind explore hop. Sim-only M2 experiment (no WorldOps mirror)."""
+        """16 trunk bases in two 8-trunk clusters: A near spawn (visible), B a
+        randomized ~22-28 blocks away (beyond the 16-block perception) -> the gap
+        forces a blind explore hop. Centers are RANDOMIZED per seed so the policy
+        can't overfit one geometry. Sim-only M2 experiment (no WorldOps mirror)."""
+        # cluster A near spawn (x,z jittered); cluster B a randomized gap away.
+        ax = 58 + (rng.next_int(9) - 4)   # spawn-ish x ±4
+        az = -48 + (rng.next_int(7) - 3)  # spawn-ish z ±3
+        gap = 22 + rng.next_int(7)        # 22..28 blocks (>perception 16)
+        # B direction: south, or east/west-south, randomized so it isn't always -z.
+        dirs = [(0, -1), (1, -1), (-1, -1)]
+        dxc, dzc = dirs[rng.next_int(3)]
+        bx = ax + dxc * gap // 2
+        bz = az + dzc * gap
         used: set[tuple[int, int]] = set()
         bases: list[tuple[int, int]] = []
-        for cx, cz in ((58, -48), (58, -72)):  # A visible near spawn; B far south
+        for cx, cz in ((ax, az), (bx, bz)):
             for row in range(2):
                 for col in range(4):
-                    x = cx - 7 + 5 * col + (rng.next_int(3) - 1)  # 51,56,61,66 (+jit)
-                    z = cz - 3 + 6 * row + (rng.next_int(3) - 1)  # cz-3, cz+3 (+jit)
+                    x = cx - 7 + 5 * col + (rng.next_int(3) - 1)
+                    z = cz - 3 + 6 * row + (rng.next_int(3) - 1)
+                    # keep inside a generous bound (clusters mode uses arena_half~34)
+                    x = max(46, min(94, x))
+                    z = max(-86, min(-14, z))
                     while (x == SPAWN_X and z == SPAWN_Z) or (x, z) in used:
                         x += 1
                     used.add((x, z))
