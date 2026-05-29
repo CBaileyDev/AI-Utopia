@@ -43,39 +43,38 @@ def main() -> int:
     from aiutopia.train.scenario_runner import M1_SCENARIOS
     from aiutopia.train.sim_env_factory import make_aiutopia_sim_env
 
-    env_config = {
-        "stage": 1,
-        "active_roles": ["gatherer"],
-        "decision_core": True,
-        "arena_mode": "clusters",
-        "arena_half": 34.0,
-        # eval: fixed seeds, no layout randomization
-        "randomize_layout": False,
-        "distance_shaping": False,  # shaping is training-only; eval is pure reward
-    }
-    any_explore = False
-    n_full = 0
-    for scn in M1_SCENARIOS:
-        r = run_instrumented(
-            scn,
-            env_factory=lambda cfg: make_aiutopia_sim_env(cfg),
-            env_config=env_config,
-            rl_module=module,
-            device="cpu",
-            wall_budget_s=120,
-        )
-        hist = Counter(e["skill"] for e in r["trace"])
-        nav = hist.get("NAVIGATE", 0)
-        any_explore = any_explore or nav > 0
-        full = r["oak_log"] >= 64
-        n_full += int(full)
-        clusterB = "BOTH clusters" if full else ("cluster A only" if r["oak_log"] >= 28 else "stuck early")
-        _p(
-            f"  seed={scn.seed}  oak_log={r['oak_log']}/64  steps={r['steps_used']}  "
-            f"NAVIGATE={nav}  MINE={hist.get('HARVEST', 0)}  -> {clusterB}"
-        )
-    _p("")
-    _p(f">>> learned to EXPLORE (NAVIGATE>0): {any_explore} ; cleared BOTH clusters on {n_full}/3 seeds <<<")
+    for arena_mode, arena_half, note in (
+        ("trees", 24.0, "all 16 trunks perceivable as the agent migrates (NO blind hop)"),
+        ("clusters", 34.0, "8 trunks beyond perception -> requires a BLIND explore hop"),
+    ):
+        _p(f"  -- arena: {arena_mode} ({note}) --")
+        env_config = {
+            "stage": 1,
+            "active_roles": ["gatherer"],
+            "decision_core": True,
+            "arena_mode": arena_mode,
+            "arena_half": arena_half,
+            "randomize_layout": False,
+            "distance_shaping": False,  # shaping is training-only; eval is pure reward
+        }
+        for scn in M1_SCENARIOS:
+            r = run_instrumented(
+                scn,
+                env_factory=lambda cfg: make_aiutopia_sim_env(cfg),
+                env_config=env_config,
+                rl_module=module,
+                device="cpu",
+                wall_budget_s=120,
+            )
+            hist = Counter(e["skill"] for e in r["trace"])
+            tag = (
+                "CLEARED ✓" if r["oak_log"] >= 64
+                else ("cluster A only" if r["oak_log"] >= 28 else "stuck")
+            )
+            _p(
+                f"    seed={scn.seed}  oak_log={r['oak_log']}/64  steps={r['steps_used']}  "
+                f"NAVIGATE={hist.get('NAVIGATE', 0)}  MINE={hist.get('HARVEST', 0)}  -> {tag}"
+            )
     return 0
 
 

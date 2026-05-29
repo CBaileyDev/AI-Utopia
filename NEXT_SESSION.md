@@ -3,6 +3,51 @@
 This supersedes the earlier post-v20 handoff. Read `PROJECT_CONTEXT.md` for the
 big picture; this captures the current frontier.
 
+## 🧭 M2 DECISION-CORE (N22, 2026-05-29) — built + learnability boundary PINNED
+
+Executed the advisor/workflow-recommended **Option B pivot** (make the POLICY decide,
+not the skill), sim-only, staged to de-risk. **The decision-core architecture works;
+the learnability boundary is now empirically precise.**
+
+**Built + committed (`e3b8dbb`, `579af7d`):**
+- **Decision-core**: `target_class` reinterpreted as an instance pointer (slot into
+  `g_nearest_resources`); HARVEST demoted to mine ONLY the pointed trunk
+  (`skills.mine_instance`) — no findNearest, no chaining. **Zero action-space /
+  RLModule change** (the key simplification). `decision_core` config flag (default
+  OFF; the proven survival-forest path is untouched).
+- `obs_adapter.gatherer_nearest_columns`: single source of truth for both
+  g_nearest_resources AND the pointer→world-column map (golden trace intact).
+- **2-cluster blind-explore arena** (`world.py arena_mode="clusters"`, sim-only): 8
+  trunks visible at spawn (cluster A), 8 beyond the 16-block perception (cluster B,
+  ~22 b south) → forces ONE blind explore hop. `arena_half` widens the OOB box.
+- PBRS distance-shaping re-added (training-only; legit now that the policy navigates).
+- `m1_gatherer_config(decision_core=True)` + `train.py --decision-core`.
+- Tools: `scripts/n21_decision_core_gonogo.py` (scripted demonstrator),
+  `scripts/decision_core_rollout.py` (eval).
+
+**FINDINGS:**
+- **Scripted go/no-go PASSES** both arenas: a hand-coded point-then-explore policy
+  clears 64/64 (clusters = 16 MINE + 1 blind NAVIGATE). The task is SOLVABLE.
+- **PPO (decision_core + clusters + PBRS, 200 iters) — the discriminator — result:**
+  the policy learned instance-selection/migration (clears cluster A = 32/64; ~56–60
+  on the all-visible trees arena) but **NAVIGATE=0 everywhere** — it never learned to
+  deliberately navigate, so it stalls once no trunk is in perception (blind-explore to
+  B, AND straggler-recovery on trees). Pure MINE-migration, same greedy collapse as the
+  v5/v6/v7 nav retrains.
+- **CONCLUSION (4× confirmed): deliberate NAVIGATE is NOT learnable by PPO+PBRS here.
+  The fix is BEHAVIOR CLONING** from the scripted demonstrator (which navigates +
+  clears 64/64) — feasible on this state-vector obs (no pixels), exactly as the
+  architecture analysis predicted. Reward-hacking is a dead end (don't repeat it).
+
+**NEXT STEP (precise, de-risked):** BC warm-start the policy from
+`n21_decision_core_gonogo.py`'s point-then-explore demonstrations (generate
+(obs, action) rollouts → supervised NLL on the RLModule's action dist → optional PPO
+fine-tune), then re-eval `decision_core_rollout.py` (expect NAVIGATE>0 + 64/64 on
+clusters). Spec/plan: `docs/superpowers/{specs,plans}/2026-05-29-gatherer-survival-forest-fidelity*`
+(the decision-core extends the same Option B path).
+
+---
+
 ## ✅✅✅ SURVIVAL-FOREST FIDELITY MILESTONE COMPLETE (2026-05-29, N21)
 
 The Lumberjack now harvests **real vertical oak trees at survival speed** and the
