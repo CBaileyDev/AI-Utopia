@@ -27,7 +27,10 @@ def _policy_mapping_fn(agent_id, episode=None, **kwargs):
 
 def m1_gatherer_config(
     *,
-    py4j_ports: tuple[int, ...] = (25001, 25002, 25003, 25004),
+    # None -> derive one distinct port per runner (25001..25000+num_env_runners).
+    # The wrapper maps worker_index % len(py4j_ports) -> port, so len(ports) MUST
+    # equal num_env_runners or runners collide onto shared Fabric servers.
+    py4j_ports: tuple[int, ...] | None = None,
     num_env_runners: int = 4,
     num_envs_per_env_runner: int = 2,
     # N17 finding: with `max_episode_ticks=2000` and the
@@ -54,10 +57,20 @@ def m1_gatherer_config(
     # but trains end-to-end at tick 60 stability.
     rollout_fragment_length: int | str = 32,
     sample_timeout_s: float = 1800.0,
-    train_batch_size: int = 256,
+    # P0: was 256 (sized for 4 runners at tick-60, with minibatch=32 that was a
+    # NaN-KL risk). With #4 masking the dead comm Gaussian the NaN source is
+    # gone, so we use a larger batch: 768 = 12 runners x 32 fragment x 2 rounds,
+    # minibatch=96. Scales the now-single-attractor signal into cleaner PPO
+    # updates. (At 4 runners this is 6 rounds/iter — still fine under
+    # sample_timeout_s.)
+    train_batch_size: int = 768,
 ) -> PPOConfig:
     """Section 7.1 M1 single-agent gatherer PPO config (new API stack)."""
     register_aiutopia_env()
+
+    # Derive one Py4J port per runner unless explicitly overridden.
+    if py4j_ports is None:
+        py4j_ports = tuple(25001 + i for i in range(num_env_runners))
 
     cfg = (
         PPOConfig()

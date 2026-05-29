@@ -8,9 +8,11 @@ from aiutopia.train.config import m1_gatherer_config, ENV_NAME
 def test_m1_gatherer_config_builds() -> None:
     cfg = m1_gatherer_config()
     d = cfg.to_dict()
-    # Defaults shrunk further for tick-60 slow-step (N13 thread-dump finding).
-    assert d["train_batch_size"] == 256
-    assert d["minibatch_size"] == 32
+    # P0: batch raised 256->768 (12 runners x 32 x 2 rounds; minibatch 96) now
+    # that #4's comm-head mask removed the NaN-KL that the old small minibatch=32
+    # risked. minibatch = min(256, 768//8) = 96.
+    assert d["train_batch_size"] == 768
+    assert d["minibatch_size"] == 96
     assert d["num_epochs"] == 5
     assert d["gamma"] == 0.99
     assert d["lr"] == 3.0e-4

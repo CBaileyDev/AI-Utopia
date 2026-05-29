@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# Launch 4 parallel Fabric training instances for M1B training, wait for them
+# Launch N parallel Fabric training instances for M1B training, wait for them
 # to be Done!, then bootstrap each Py4J port via setup_training_scene().
 #
 # One command -> training-ready cluster.
+#
+# Count is parameterized: NUM_INSTANCES (default 4). Instance i uses
+# Py4J port 25000+i and MC port 25565+i. e.g. NUM_INSTANCES=12 -> Py4J
+# 25001-25012, MC 25566-25577. (P0: scaled from a hardcoded 4 to N so the
+# now-single-attractor reward can use more on-task rollouts per PPO update.)
 #
 # On Windows under MSYS/Git-Bash, use cp not ln -sf to avoid symlink perms.
 #
@@ -11,31 +16,32 @@
 # points at a live process) and will still re-run the bootstrap step. That
 # makes this script safe to use as a "fix-up after partial start" tool.
 #
-# DRY_RUN=1: skip the actual java + py bootstrap invocations (validation mode
-# only — used by `bash -x DRY_RUN=1 ...` to exercise control flow without
-# touching real servers). Useful when training is already running and we
-# only want to syntax-check the script.
+# DRY_RUN=1: skip the actual java + py bootstrap invocations (validation mode).
 set -euo pipefail
 : "${JDK_HOME:?must be set}"
 export JAVA_HOME="$JDK_HOME"
 export PATH="$JDK_HOME/bin:$PATH"
 
 DRY_RUN="${DRY_RUN:-0}"
+NUM_INSTANCES="${NUM_INSTANCES:-4}"
+HEAP_MAX="${HEAP_MAX:-3g}"          # per-instance -Xmx (tiny forceloaded arena)
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCTION_DIR="$REPO_ROOT/server-runtime"
 TRAINING_DIR="$REPO_ROOT/server-runtime/training"
-MOD_JAR="$REPO_ROOT/fabric_mod/build/libs/aiutopia-mod-0.0.0-m1b.jar"
+# P0: deploy the Phase-0 jar (64-reachable-log arena + reward/term fixes), NOT
+# the old m1b jar the script originally hardcoded.
+MOD_JAR="$REPO_ROOT/fabric_mod/build/libs/aiutopia-mod-0.0.0-m1c-p0.jar"
+MOD_JAR_NAME="$(basename "$MOD_JAR")"
 
 if [[ ! -f "$MOD_JAR" ]]; then
-    echo "ERROR: $MOD_JAR not found — run T22's gradle build first"
+    echo "ERROR: $MOD_JAR not found — run the gradle build first"
     exit 1
 fi
 
 # --- helper: is a Py4J port already bound? -----------------------------------
 port_in_use() {
     local port="$1"
-    # lsof works on MSYS/Git-Bash when available; fall back to netstat/ss.
     if command -v lsof >/dev/null 2>&1; then
         lsof -i ":$port" >/dev/null 2>&1 && return 0
     fi
@@ -56,12 +62,11 @@ instance_running() {
     local pid
     pid="$(cat "$pidfile" 2>/dev/null || true)"
     [[ -n "$pid" ]] || return 1
-    # On MSYS, `kill -0` works for native windows PIDs spawned by bash.
     kill -0 "$pid" >/dev/null 2>&1
 }
 
 mkdir -p "$TRAINING_DIR"
-for i in 1 2 3 4; do
+for i in $(seq 1 "$NUM_INSTANCES"); do
     INST="$TRAINING_DIR/instance-$i"
     PY4J_PORT=$((25000 + i))
     MC_PORT=$((25565 + i))
@@ -77,7 +82,7 @@ for i in 1 2 3 4; do
         for m in fabric-api fabric-carpet ferritecore; do
             cp "$PRODUCTION_DIR/mods/$m"-*.jar "$INST/mods/" 2>/dev/null || true
         done
-        cp "$MOD_JAR" "$INST/mods/aiutopia-mod-0.0.0-m1b.jar"
+        cp "$MOD_JAR" "$INST/mods/$MOD_JAR_NAME"
         echo "eula=true" > "$INST/eula.txt"
         cat > "$INST/server.properties" <<PROPS
 server-port=$MC_PORT
@@ -99,34 +104,31 @@ PROPS
         continue
     fi
 
-    echo "[launch] instance-$i on MC:$MC_PORT Py4J:$PY4J_PORT"
+    echo "[launch] instance-$i on MC:$MC_PORT Py4J:$PY4J_PORT (heap $HEAP_MAX)"
     if [[ "$DRY_RUN" == "1" ]]; then
         echo "[dry-run] would: cd $INST && nohup java -Daiutopia.py4j.port=$PY4J_PORT ... &"
         continue
     fi
     (
       cd "$INST"
-      # N19-followup: bumped -Xmx 2g -> 4g. v20 instances spent
-      # significant time near the 2g cap (~1.5g working set) and the
-      # per-step time degraded from ~1.5s to ~12s over 7-9 iters,
-      # likely due to G1 GC pressure once heap hit 75% live. 4g gives
-      # headroom for both the player chunks the agent loads and the
-      # ItemEntity buildup from mining-style HARVEST cycles. -Xms also
-      # raised so the heap doesn't need to grow into the new ceiling.
+      # Per-instance heap. The arena is a tiny forceloaded 33x33 region and P0
+      # success-termination keeps episodes short (end at 64 logs), so the
+      # ItemEntity/chunk buildup that drove the old 4g bump is much reduced;
+      # 3g x N keeps total RAM modest while scaling instance count.
       nohup java -Daiutopia.py4j.port=$PY4J_PORT \
-                  -Xms2g -Xmx4g -XX:+UseG1GC \
+                  -Xms2g -Xmx"$HEAP_MAX" -XX:+UseG1GC \
                   -jar fabric-server-launcher.jar nogui \
                   > "instance-$i.log" 2>&1 &
       echo $! > "instance-$i.pid"
     )
 done
 
-echo "All 4 instances launching. Waiting for 'Done (' in each log (90s/instance timeout)..."
+echo "All $NUM_INSTANCES instances launching. Waiting for 'Done (' in each log (90s/instance timeout)..."
 
 # --- wait-for-ready: poll each instance-N.log for the "Done (" line ----------
 WAIT_TIMEOUT=90
 WAIT_FAILED=0
-for i in 1 2 3 4; do
+for i in $(seq 1 "$NUM_INSTANCES"); do
     INST="$TRAINING_DIR/instance-$i"
     LOG="$INST/instance-$i.log"
     if [[ "$DRY_RUN" == "1" ]]; then
@@ -158,16 +160,18 @@ if (( WAIT_FAILED == 1 )); then
 fi
 
 # --- bootstrap: setup_training_scene on each port via FabricBridge -----------
-echo "[bootstrap] invoking setup_training_scene() on ports 25001-25004..."
+echo "[bootstrap] invoking setup_training_scene() on ports 25001-$((25000 + NUM_INSTANCES))..."
 if [[ "$DRY_RUN" == "1" ]]; then
     echo "[dry-run] would: PYTHONPATH=src py -3.11 -c '<bootstrap snippet>'"
 else
     (
       cd "$REPO_ROOT"
-      PYTHONPATH=src py -3.11 -c "
+      PYTHONPATH=src AIUTOPIA_NUM="$NUM_INSTANCES" py -3.11 -c "
+import os
 from aiutopia.env.bridge import FabricBridge
+n = int(os.environ['AIUTOPIA_NUM'])
 ok_all = True
-for port in (25001, 25002, 25003, 25004):
+for port in range(25001, 25001 + n):
     try:
         with FabricBridge(port=port) as b:
             h = b.health()
@@ -183,13 +187,13 @@ if not ok_all:
     )
 fi
 
-cat <<'BANNER'
+cat <<BANNER
 ============================================================
-4 training instances are READY:
-  - MC ports: 25566-25569
-  - Py4J ports: 25001-25004
-  - Arena: flat grass at Y=65, log ring at Y=66, tick rate 300
-You can now launch training:
-  PYTHONPATH=src py -3.11 scripts/train.py --milestone M1 ...
+$NUM_INSTANCES training instances are READY:
+  - MC ports: 25566-$((25565 + NUM_INSTANCES))
+  - Py4J ports: 25001-$((25000 + NUM_INSTANCES))
+  - Arena: flat grass at Y=65, 64 oak_log flat grid at Y=66, tick rate 60
+Launch training with matching runner count:
+  PYTHONPATH=src py -3.11 scripts/train.py --milestone M1 --num-env-runners $NUM_INSTANCES ...
 ============================================================
 BANNER

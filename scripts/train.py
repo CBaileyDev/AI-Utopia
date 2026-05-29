@@ -73,7 +73,10 @@ def main() -> None:
     args = parser.parse_args()
 
     paths = Paths.from_env(); paths.ensure()
-    ray.init(num_cpus=16, num_gpus=1,
+    # num_cpus must exceed num_env_runners (each EnvRunner reserves ~1 CPU slot)
+    # + the in-driver learner/driver. EnvRunners are I/O-bound (waiting on Py4J
+    # while the JVMs compute), so reserving >physical-core slots is safe here.
+    ray.init(num_cpus=max(16, args.num_env_runners + 6), num_gpus=1,
              object_store_memory=8 * 1024**3,
              _system_config={"object_spilling_threshold": 0.95})
 
