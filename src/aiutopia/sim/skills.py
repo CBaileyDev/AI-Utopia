@@ -55,7 +55,11 @@ from aiutopia.sim.world import SimWorld
 # ---------------------------------------------------------------------------
 WALK_PER_TICK = 4.3 / 20.0  # 0.215 b/tick (HarvestSkill/NavigateSkill)
 HARVEST_REACH = 4.5  # HarvestSkill.REACH_RADIUS (N16b)
-MAX_SEARCH_RADIUS = 16.0  # HarvestSkill.MAX_SEARCH_RADIUS
+MAX_SEARCH_RADIUS = 48.0  # HarvestSkill.MAX_SEARCH_RADIUS (N21: 16->48, ≈arena
+# diagonal — deliberately WIDER than the obs SCAN_RADIUS=16 so HARVEST's internal
+# chaining can reach logs the policy can't perceive. Mirrors HarvestSkill.java:48.
+# At 16 the chain halted once the tail stranded >16b from the agent's rest pos
+# (the seed-3 55/64 stall); 48 lets one HARVEST clear the whole field (64/64).
 NAV_ARRIVAL = 1.0  # NavigateSkill.ARRIVAL_RADIUS
 MAX_NAV_RANGE = 32.0  # NavigateSkill.MAX_NAV_RANGE
 NAV_VERT_RANGE = 8.0  # NavigateSkill vertical multiplier

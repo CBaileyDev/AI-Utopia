@@ -26,8 +26,14 @@ import java.util.Optional;
  *  match on `Registries.BLOCK.getId(state.getBlock())`. The full
  *  enum-to-class mapping per §4.2 is Plan B work.
  *
- *  SEARCH_RADIUS = 16 to match the gatherer obs scan radius — the policy
- *  sees resources to 16 blocks; harvest should be able to reach the same.
+ *  MAX_SEARCH_RADIUS = 48 (N21) is DELIBERATELY DECOUPLED from (and wider than)
+ *  the gatherer obs scan radius of 16. The policy only PERCEIVES resources to 16
+ *  blocks, but HARVEST chains internally (re-scan + walk to the next-nearest log
+ *  as it runs), so it must be able to FIND logs the policy can't see — otherwise,
+ *  once the agent clears the near cluster and the tail strands >16 blocks from its
+ *  rest position, findNearest returns empty and chaining halts (the seed-3 55/64
+ *  stall). 48 ≈ the 33×33 arena diagonal, so chaining can always reach the next
+ *  log from any rest position. (Was 16, which incorrectly mirrored the obs scan.)
  *
  *  Sequencing per tick:
  *    1. If no current target block, scan radius for a match. None → COMPLETED if
@@ -45,7 +51,7 @@ import java.util.Optional;
  */
 public class HarvestSkill implements SkillExecutor {
 
-    private static final double MAX_SEARCH_RADIUS = 16.0;
+    private static final double MAX_SEARCH_RADIUS = 48.0;
     // N16b: with REACH=3.0, the collision attractor at dist≈3.0+ε still
     // pinned the agent (`step = min(WALK, dist-3.0)` shrunk to ~2e-4 b/tick
     // because the agent's bbox tangents the log column at horizontal 0.8
