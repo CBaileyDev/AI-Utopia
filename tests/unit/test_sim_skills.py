@@ -41,3 +41,16 @@ def test_harvest_fails_when_no_logs_left():
     w, comp = apply_skill(w, _harvest())
     assert comp["resultCode"] in ("FAILED_TIMEOUT", "IMMEDIATE_FAILURE")
     assert w.inventory.get("oak_log", 0) == 0
+
+
+def test_harvest_wrong_target_class_collects_nothing():
+    # Phase-C transfer fix: target_class must match oak_log (0). Any other class
+    # matches no resource in the M1B arena -> IMMEDIATE_FAILURE, 0 collected,
+    # mirroring real MC. (Without this gate the sim ignored target_class, the
+    # policy learned an arbitrary 54, and real MC collected 0.)
+    w = SimWorld()
+    w.reset(seed=1)
+    w, comp = apply_skill(w, _harvest(target_class=54))  # the observed bad class
+    assert comp["resultCode"] == "IMMEDIATE_FAILURE"
+    assert w.inventory.get("oak_log", 0) == 0
+    assert int(w.log_alive.sum()) == 64  # nothing harvested

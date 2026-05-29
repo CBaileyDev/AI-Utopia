@@ -61,6 +61,14 @@ MAX_NAV_RANGE = 32.0  # NavigateSkill.MAX_NAV_RANGE
 NAV_VERT_RANGE = 8.0  # NavigateSkill vertical multiplier
 MAX_QUANTITY = 64  # HarvestSkill.MAX_QUANTITY
 
+# Phase-C transfer fix: the real HarvestSkill resolves target_class -> a block
+# substring via the Java TARGET_CLASS_TABLE and only collects matching blocks.
+# oak_log is class 0 (confirmed by n14/n20 probes). The M1B arena holds ONLY
+# oak_log, so a dispatch with any other target_class matches nothing. Modeling
+# this forces the policy to learn target_class=0 — without it the sim ignored
+# target_class, the policy learned an arbitrary 54, and real MC collected 0.
+OAK_LOG_TARGET_CLASS = 0
+
 # Generous walk-tick budget so a single harvest can always reach an in-range
 # log; mirrors the spirit of the Java timeout (the agent walks ~16 blocks at
 # 0.215 b/tick ~= 75 ticks before reaching the farthest in-range log).
@@ -165,6 +173,18 @@ def _apply_harvest(world: SimWorld, action) -> dict:
     scalar = _as_scalar(action.get("scalar_param"), 1.0 / MAX_QUANTITY)
     scalar, clipped = _clip_scalar(scalar, 0)
     cap = max(1, int(round(scalar * MAX_QUANTITY)))
+
+    # target_class gate (see OAK_LOG_TARGET_CLASS): the arena is oak_log-only,
+    # so any non-oak target_class matches no resource -> IMMEDIATE_FAILURE,
+    # mirroring the real HarvestSkill. This makes target_class a load-bearing
+    # action dim the policy must get right, closing the sim->real transfer gap.
+    target_class = int(np.asarray(action.get("target_class", OAK_LOG_TARGET_CLASS)).reshape(-1)[0])
+    if target_class != OAK_LOG_TARGET_CLASS:
+        return _completion(
+            "IMMEDIATE_FAILURE",
+            f"no resource for target_class={target_class} within {MAX_SEARCH_RADIUS} blocks",
+            clipped,
+        )
 
     broken = 0
     while broken < cap:
