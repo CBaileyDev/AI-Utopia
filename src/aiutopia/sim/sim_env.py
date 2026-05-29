@@ -53,12 +53,11 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-import numpy as np
 from gymnasium.spaces import Dict as DictSpace
 from pettingzoo import ParallelEnv
 
 from aiutopia.env._embeds import _goal_success, gatherer_stub_subgoal
-from aiutopia.env.reward import GAMMA, _inventory_from_obs
+from aiutopia.env.reward import _inventory_from_obs
 from aiutopia.env.spaces import (
     build_role_action_space,
     build_role_observation_space,
@@ -80,25 +79,6 @@ _ARENA_FLOOR_Y = 60.0
 
 def _role_of(agent_id: str) -> str:
     return agent_id.split("_", 1)[0]
-
-
-# Distance-shaping weight (training-only PBRS). Makes moving toward the nearest
-# uncollected log immediately rewarding so the policy learns NAVIGATE's
-# (otherwise delayed) value — closing gap #2's credit-assignment local optimum
-# where the policy spammed HARVEST and never repositioned. PBRS is
-# policy-invariant: it speeds learning the navigate behavior without changing the
-# optimal policy. Off by default; the sim training config opts in.
-_SHAPING_W = 0.1
-
-
-def _log_potential(world: SimWorld) -> float:
-    """PBRS potential Φ(s) = -_SHAPING_W * (distance to nearest uncollected log),
-    0 when none remain. Higher (less negative) when closer to a log."""
-    alive = world.log_alive
-    if not bool(alive.any()):
-        return 0.0
-    d = world.logs[alive].astype(np.float64) - world.agent_pos
-    return -_SHAPING_W * float(np.sqrt((d * d).sum(axis=1)).min())
 
 
 class AiUtopiaSimEnv(ParallelEnv):
@@ -141,26 +121,6 @@ class AiUtopiaSimEnv(ParallelEnv):
         # seeds (1/2/3) for the gate. Set via env_config["randomize_layout"].
         self._randomize_layout = bool(config.get("randomize_layout", False))
         self._train_ep = 0
-        # Training-only PBRS distance shaping (see _log_potential).
-        self._distance_shaping = bool(config.get("distance_shaping", False))
-        self._prev_phi: dict[str, float] = {}
-        # Training-only penalty for a FAILED skill dispatch (IMMEDIATE_FAILURE /
-        # FAILED_TIMEOUT). Breaks the HARVEST-spam local optimum: once the agent
-        # has cleared every log inside MAX_SEARCH_RADIUS, further HARVESTs fail
-        # (the tail is >16 b away, unsearchable) — without a cost the policy
-        # happily spams failing HARVEST forever; with one, repositioning via
-        # NAVIGATE (which the distance shaping already rewards toward the far
-        # log) becomes the better action. Not potential-based (it intentionally
-        # shifts the optimum away from no-op spam); eval leaves it at 0.
-        self._failure_penalty = float(config.get("failure_penalty", 0.0))
-        # Training-only terminal bonus on goal success (collected all 64). The
-        # tail logs are worth only ~+2 (oak_log=+1, no completion bonus in the
-        # base reward), too small to flip HARVEST's argmax toward the NAVIGATE-
-        # then-HARVEST needed to clear the >16 b tail (v5/v6 stayed HARVEST-only).
-        # A large success bonus makes navigate-to-completion strongly dominant
-        # over both stall-spam and arena-escape. Eval leaves it at 0 (the gate
-        # only checks oak_log>=64), so it never inflates the reported metric.
-        self._completion_bonus = float(config.get("completion_bonus", 0.0))
 
     # ───── PettingZoo API ─────
     def observation_space(self, agent: str) -> DictSpace:
@@ -183,7 +143,6 @@ class AiUtopiaSimEnv(ParallelEnv):
             world = self.worlds[agent]
             world.reset(int(seed))
             obs[agent] = build_gatherer_obs(world)
-            self._prev_phi[agent] = _log_potential(world)
         self._prev_obs = obs
         infos = {a: {} for a in self.agents}
         return obs, infos
@@ -217,19 +176,6 @@ class AiUtopiaSimEnv(ParallelEnv):
                 "exploit_penalties": [],  # Phase A: no exploit detector in sim
             }
             rew[agent] = step_reward(obs_prev, obs_curr, action, env_meta)
-            # PBRS distance shaping (training-only): r += γ·Φ(s') − Φ(s). Makes
-            # NAVIGATE toward the nearest log immediately rewarding so the policy
-            # learns to reposition instead of HARVEST-spamming a depleted area.
-            if self._distance_shaping:
-                phi = _log_potential(world)
-                rew[agent] += GAMMA * phi - self._prev_phi.get(agent, phi)
-                self._prev_phi[agent] = phi
-            # Training-only failed-dispatch penalty (breaks HARVEST-spam stall).
-            if self._failure_penalty and completion.get("resultCode") in (
-                "IMMEDIATE_FAILURE",
-                "FAILED_TIMEOUT",
-            ):
-                rew[agent] -= self._failure_penalty
 
             # 5. SUCCESS termination — same predicate the wrapper uses, over the
             # shared stub goal ({oak_log: 64}). _inventory_from_obs is the SAME
@@ -238,10 +184,6 @@ class AiUtopiaSimEnv(ParallelEnv):
             curr_inv = _inventory_from_obs(obs_curr)
             goal_success = _goal_success(self._stub_subgoal.goal_specification, curr_inv)
             term[agent] = goal_success
-            # Training-only terminal bonus (see __init__); makes clearing the
-            # full field strongly dominant over stall-spam / arena-escape.
-            if goal_success and self._completion_bonus:
-                rew[agent] += self._completion_bonus
 
             # 6. TRUNCATION — tick budget OR out of the seeded arena box (N19).
             pos = obs_curr.get("position", None)

@@ -112,25 +112,16 @@ def m1_gatherer_config(
             "stage": 1,
             "active_roles": ["gatherer"],
             "max_episode_ticks": max_episode_ticks,
-            # Vary the arena layout per training episode so the policy learns a
-            # general navigate-and-repeat strategy (not a single-layout overfit);
-            # eval/transfer pass fixed seeds and never set this.
+            # Vary the arena layout per training episode so the policy sees the
+            # full layout distribution (not a single-layout overfit); eval/transfer
+            # pass fixed seeds and never set this.
             "randomize_layout": True,
-            # PBRS distance shaping so NAVIGATE's (delayed) value is learnable;
-            # policy-invariant, training-only. Closes gap #2's local optimum
-            # where the policy HARVEST-spammed and never repositioned.
-            "distance_shaping": True,
-            # Penalty for a failed skill dispatch (no-op HARVEST spam at a stall).
-            # v6 used 0.5 which, given oak_log=+1 and ~300-tick episodes, risked
-            # an arena-ESCAPE optimum (~-150/ep made walking off the edge cheaper
-            # than collecting). v6 didn't escape but stayed HARVEST-only. v7 cuts
-            # it to a mild 0.05 (de-risk escape) and leans on completion_bonus.
-            "failure_penalty": 0.05,
-            # v7: terminal bonus on collecting all 64. The tail is worth only ~+2
-            # in the base reward — too small to flip HARVEST's argmax toward the
-            # NAVIGATE-then-HARVEST that clears the >16 b tail. +10 makes
-            # navigate-to-completion strongly dominant. Training-only (eval=0).
-            "completion_bonus": 10.0,
+            # N21 Path A: the distance_shaping / failure_penalty / completion_bonus
+            # flags were removed — they targeted a "teach the policy to NAVIGATE"
+            # fix that is impossible given the obs is blind beyond 16 b (both sim
+            # and real). Real MC clears the field via HARVEST's internal chaining
+            # (restored in skills.py), so the policy is correctly HARVEST-only and
+            # needs no nav incentive. See NEXT_SESSION.md "N21 FINAL".
         }
     else:
         register_aiutopia_env()
@@ -179,12 +170,7 @@ def m1_gatherer_config(
             lambda_=0.95,
             clip_param=0.2,
             vf_clip_param=10.0,
-            # v7: 0.01 -> 0.02. v5/v6 collapsed to HARVEST-argmax everywhere and
-            # never sampled NAVIGATE at the stall, so a completion bonus alone
-            # has no trajectory to reinforce. More entropy keeps NAVIGATE alive
-            # long enough to discover the navigate-to-completion path. (Affects
-            # both backends; only sim trains now and real benefits too.)
-            entropy_coeff=0.02,
+            entropy_coeff=0.01,
             kl_coeff=0.2,
             grad_clip=1.0,
             # NO legacy model={"use_lstm": True} block — the custom RLModule
