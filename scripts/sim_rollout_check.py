@@ -78,9 +78,20 @@ def main() -> int:
         hist = Counter(e["skill"] for e in r["trace"])
         nav = hist.get("NAVIGATE", 0)
         any_nav = any_nav or nav > 0
+        # End-reason: distinguishes the desired close (success/tick-limit while
+        # still collecting) from the arena-ESCAPE failure mode (early OOB
+        # truncation — the risk the per-step failure_penalty introduces).
+        if r["success"]:
+            end = "SUCCESS"
+        elif r["steps_used"] >= scn.max_ticks:
+            end = "TICK_LIMIT"
+        elif r["trace"] and r["trace"][-1].get("trunc"):
+            end = f"OOB_ESCAPE@{r['steps_used']}"  # walked out of arena bounds
+        else:
+            end = "?"
         _p(
             f"  seed={scn.seed}  oak_log={r['oak_log']}/64  success={r['success']}  "
-            f"steps={r['steps_used']}  NAVIGATE={nav}  HARVEST={hist.get('HARVEST', 0)}"
+            f"steps={r['steps_used']}  end={end}  NAVIGATE={nav}  HARVEST={hist.get('HARVEST', 0)}"
         )
         _p(f"    full histogram: {dict(hist)}")
     _p("")

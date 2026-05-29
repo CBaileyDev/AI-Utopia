@@ -66,6 +66,27 @@ The bounded-skills work below is committed. New, decisive findings this session:
      (instance-1, port 25001). Watch for a genuine real-MC reach limit on the
      tail logs — distinct from the (now-solved) sim nav gap.
 
+**⚠️ KNOWN RISK in v6 — the failure_penalty may backfire (read v6 carefully).**
+`oak_log` is worth **+1.0/log, no terminal completion bonus** (`reward.py:16`),
+so the tail is worth only ~+2 (seed2). But `failure_penalty=0.5` per step accrues
+to truncation (~0.5 × ~298 ≈ **−150/episode**). The cheapest escape from that is a
+single large NAVIGATE **out of the ±24 arena** (`MAX_NAV_RANGE=32` exits in one
+dispatch → OOB truncation → penalty stops) — strictly easier to discover than
+"NAVIGATE to the exact tail + follow-up HARVEST". So v6 may converge to *grab the
+near cluster, then walk off the edge*. `sim_rollout_check.py` now prints an
+`end=` field — **read it**:
+  - `end=OOB_ESCAPE@<n>` (short episodes) → escape optimum confirmed. Fix:
+    **drop `failure_penalty` to ~0.05 AND add an OOB penalty** (or only penalize
+    the first failed dispatch per stall), NOT more exploration.
+  - `end=TICK_LIMIT`, still 100% HARVEST → no discovery → raise `entropy_coeff`
+    and/or the shaping weight (`_SHAPING_W`).
+  - `NAVIGATE>0` but wanders, never clears → direction-learning → shaping weight.
+**Cleanest alternative to the penalty entirely:** a **terminal completion bonus**
+for reaching 64 makes the tail worth a lot (so navigate-to-collect dominates and
+escape is never tempting) — this is likely the more robust fix than tuning a
+per-step penalty. Consider it first next cycle. A second full re-train is a
+**user check-in point**, not autonomous spend.
+
 **Two environment gotchas burned time this session — heed them:**
 - **Windows PYTHONPATH uses `;`, not `:`.** `PYTHONPATH=src:scripts` is ONE bogus
   entry → `aiutopia` not importable → `RLModule.from_checkpoint` silently returns
