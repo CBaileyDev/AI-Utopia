@@ -3,14 +3,57 @@
 This supersedes the earlier post-v20 handoff. Read `PROJECT_CONTEXT.md` for the
 big picture; this captures the current frontier.
 
-## TL;DR
+## ✅✅ M1B SOLVED — sim→real gate PASSES 3/3 (2026-05-29, N21)
 
-We pivoted from grinding M1B on real Minecraft (~0.9 env-steps/s, ~50 days to
-the gate) to a **fast headless sim** (the RLGym/RocketSim + Craftax pattern). The
-sim trains the gatherer to convergence in **~90 s (≈170× real-MC)**, and a
-sim-trained policy **transfers to the real M1B gate on 2 of 3 seeds (64/64
-oak_log)**. The remaining seed is blocked by a now-diagnosed fidelity gap (being
-closed) plus a possible real-MC motor-reach limit.
+A gatherer policy **trained entirely in the headless sim clears the REAL Minecraft
+M1B gate on all three seeds** (64/64 oak_log each, ~8–9 s/scenario):
+
+```
+REAL m1_oak_log_seed_1: 64/64 ✓   seed_2: 64/64 ✓   seed_3: 64/64 ✓   →  3/3 = 100% PASS
+```
+
+Reproduce: instance-1 must be warm (`NUM_INSTANCES=1 JDK_HOME=… bash
+scripts/launch-training-instances.sh`), then `PYTHONPATH=src AIUTOPIA_DATA_DIR=…
+py -3.11 scripts/transfer_eval.py`. **NB the first reset on a freshly-launched
+server hits the cold-start spawn race (seed_1 → 0/64 in 1 step); just re-run — it
+clears on the warm pass.** The fast-sim + iterative fidelity-loop methodology is
+now proven end-to-end; this is the template for every future role.
+
+**What closed it (full arc, N21):** the bounded-skills detour (v4) and three
+reward-tuning re-trains (v5 PBRS / v6 +penalty / v7 +completion-bonus) were all
+dead ends — the policy is *correctly* HARVEST-only (real HARVEST chains
+internally), and the real blocker was a **second 16-block search-radius limit**
+in `HarvestSkill` (`MAX_SEARCH_RADIUS`), distinct from the obs scan. Fix = a
+symmetric `16→48` one-liner in `HarvestSkill.java:48` + `sim/skills.py:58`
+(commit `57894a9`); jar rebuilt + redeployed to all 12 instance dirs; **no
+re-train needed**. The reverted real-faithful sim (commit `d4d3985`) + this radius
+fix = the whole solution. Two earlier "blockers" were misreads: the "dy=+3 motor
+limit" (logs are all Y=66=dy+1) and the "obs blindness blocks navigation" (true,
+but nav was never needed — chaining does the work).
+
+**Server state:** instance-1 is RUNNING (MC 25566 / Py4J 25001) with the new jar.
+The other 11 instance dirs have the new jar deployed but are stopped.
+
+## Next frontier (M1B is done — pick up here)
+- **Promote the gatherer weights** (the §5.10 checklist / `aiutopia.cli.promote_weights`)
+  and tag M1B verified (M1A_PIPELINE_PLAN T22 / M0_PROGRESS).
+- **Scale-out for future roles:** see `PROJECT_CONTEXT.md §9.1` (added this session) —
+  the bottleneck is now RLlib framework+policy overhead, not the sim or GPU; the
+  next throughput unlock is the Phase-D JAX vectorized sim (~200–500×), worth
+  building only when M2+ multi-role load can consume it. For M1B, no new hardware
+  is warranted.
+- **M2 / new roles** (Lumberjack→Miner/Farmer/Soldier/Scout): each is a new sim
+  module behind the same obs/action/reward contract, validated by the same
+  sim→real transfer loop just proven here.
+
+---
+
+## (Historical) TL;DR — the arc that led to the 3/3 pass
+
+We pivoted from grinding M1B on real Minecraft (~0.9 env-steps/s) to a **fast
+headless sim** (the RLGym/RocketSim + Craftax pattern). The sim trains the gatherer
+to convergence in **~90 s (≈170–250× real-MC)**; the sim→real transfer went
+2/3 → **3/3** once the `MAX_SEARCH_RADIUS` skill-search limit was fixed (above).
 
 ## Where things stand
 
