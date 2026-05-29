@@ -109,6 +109,11 @@ public class WorldOps {
             net.minecraft.server.command.ServerCommandSource src = server.getCommandSource();
             cm.executeWithPrefix(src, "/tp " + playerName + " 64 66 -48");
             cm.executeWithPrefix(src, "/clear " + playerName);
+            // N21: equip a stone axe in the main hand so HARVEST's survival
+            // break-timing (BREAK_TICKS_PER_LOG) reflects a real tool, not a
+            // bare hand. /item replace guarantees the main hand each episode.
+            cm.executeWithPrefix(src, "/item replace entity " + playerName
+                + " weapon.mainhand with minecraft:stone_axe");
             cm.executeWithPrefix(src,
                 "/fill 48 66 -64 80 70 -32 air replace");
 

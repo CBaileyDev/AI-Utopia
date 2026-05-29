@@ -75,6 +75,13 @@ public class HarvestSkill implements SkillExecutor {
     private static final int    STALL_TICK_BUDGET = 20;
     private static final double STALL_DIST_EPSILON_SQ = 1e-4;
 
+    // N21: survival break-timing. Oak log hardness 2.0; with a stone axe ~0.75 s
+    // ≈ 15 ticks (vanilla). Each log is "mined" for this many ticks while in
+    // reach before it breaks (was instant/creative). Deterministic tick counter;
+    // the N16c direct-inventory-insert below is unchanged (no item-drop/pickup
+    // race) — spike-verified deterministic on real MC (n21_breaktiming_determinism).
+    private static final int    BREAK_TICKS_PER_LOG = 15;
+
     private String targetSubstr;
     private int    cap;
     private int    brokenCount = 0;
@@ -82,6 +89,7 @@ public class HarvestSkill implements SkillExecutor {
     private BlockPos lastAbandonedTarget;     // N16
     private Vec3d  lastPos;                   // N16
     private int    stuckTicks;                // N16
+    private int    breakProgress = 0;         // N21: ticks spent mining current target
     private long   ticksRemaining;
     private int    clipped;
     private String failureReason = "";
@@ -143,6 +151,7 @@ public class HarvestSkill implements SkillExecutor {
             currentTarget = cand;
             lastPos       = agent.getPos();
             stuckTicks    = 0;
+            breakProgress = 0;  // N21: reset mining timer on new target
         }
         Vec3d targetCenter = Vec3d.ofCenter(currentTarget);
         Vec3d here = agent.getPos();
@@ -200,6 +209,13 @@ public class HarvestSkill implements SkillExecutor {
             currentTarget = null;
             return SkillResult.RUNNING;
         }
+        // N21 survival break-timing: "mine" the in-reach block for
+        // BREAK_TICKS_PER_LOG ticks before it breaks (vs instant/creative).
+        // Deterministic counter; the direct-inventory insert below is unchanged.
+        if (++breakProgress < BREAK_TICKS_PER_LOG) {
+            return SkillResult.RUNNING;
+        }
+        breakProgress = 0;
         // 1. Compute drops via the block's loot table (oak_log → 1 oak_log).
         //    breakingEntity=agent lets loot tables that key on entity (eg
         //    looting/silk-touch) work correctly when tools are added later.
