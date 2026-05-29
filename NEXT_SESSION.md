@@ -37,11 +37,19 @@ not the skill), sim-only, staged to de-risk. **A greedy decision-core policy cle
 - Tools: `scripts/n21_decision_core_gonogo.py` (scripted demonstrator),
   `scripts/decision_core_rollout.py` (eval).
 
-**🟢 RESULT — decision-core greedily clears the trained blind-explore arena (NO BC needed).**
-A greedy policy clears the 2-cluster arena **64/64 on eval seeds 1/2/3** (commit `6053556`):
-MINE cluster A → ONE NAVIGATE hop (mask-forced when blind) → MINE cluster B. Demonstrates
-the decision-core + perception-mask works; see the two caveats above (mask is load-bearing;
-single training seed/layout). NO behavior-cloning required — the earlier "needs BC" was wrong.
+**🟢 RESULT — decision-core greedily clears blind-explore arenas + partially generalizes (NO BC).**
+- v2 (fixed clusters, commit `6053556`): greedy clears 64/64 — MINE cluster A → ONE
+  NAVIGATE hop (mask-forced when blind) → MINE cluster B.
+- v4 (RANDOMIZED clusters + blind-only shaping, commit `f355c9c`): clears 64/64 across
+  3 randomized geometries; **HELD-OUT (novel high-seed geometries) = 3/5 cleared.**
+- The 2/5 held-out failures are the explore-**DIRECTION**: blind explore with **no
+  directional cue** + randomized B-direction → the policy can only learn a direction
+  *prior* (works for common directions, thrashes — NAVIGATE=192 — for others). This is
+  inherent to local blind search; **robust global search is the Explorer/Scout role's
+  job** (roadmap: the Explorer finds + reports resource locations), not the Lumberjack's
+  local decision-core. NO behavior-cloning needed — the earlier "needs BC" was wrong.
+- (Mixed trees+clusters training REGRESSED it — trees rarely masks HARVEST so it dilutes
+  the explore signal. Train explore on clusters-only.)
 
 The earlier "needs BC, 4× confirmed" framing was WRONG — a greedy-eval artifact, not
 a learning failure (the advisor caught it from training `ep_len≈90 < cap 300` =
