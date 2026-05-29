@@ -83,7 +83,24 @@ public class WorldOps {
      *   - teleport agent to spawn (64, 66, -48) — 1 block above grass floor
      *   - clear agent inventory
      *   - air-fill the arena above the grass floor (Y=66..70), preserves grass at Y=60..65
-     *   - place a ring of 8 oak_log blocks at Y=66 (on top of grass), radius 4-6, seeded
+     *   - place a 64-oak_log FLAT grid at Y=66 (on top of grass), seeded jitter
+     *
+     *  P0 fix: the M1B eval gate is "collect 64 oak_log in one episode," but the
+     *  old reset seeded only 8 logs with no refill, making the gate unmeetable by
+     *  construction. We now place exactly 64 oak_log per episode, all flat at Y=66.
+     *
+     *  REACHABILITY (see HarvestSkill.java): REACH_RADIUS=4.5; the skill has no
+     *  climb/jump (horizontal move only) and findNearest PREFERS ground-level
+     *  matches dy ∈ [-2,+1]. The agent stands at Y=66, so logs MUST be flat at
+     *  Y=66 (dy=0, squarely in the preferred shell) — NEVER stacked vertically,
+     *  or they become deprioritized and unreachable.
+     *
+     *  Layout: an 8×8 grid with 3-block spacing — x = 50+3*col (50..71),
+     *  z = -62+3*row (-62..-41) = 64 distinct cells, all inside [48,80]×[-64,-32].
+     *  The grid straddles the spawn tile (64,-48) so the agent is among the logs.
+     *  Each cell gets a seeded ±1 jitter for per-episode variety (so eval seeds
+     *  1/2/3 differ and the policy can't memorize one layout); jittered coords are
+     *  clamped to the arena and guaranteed unique + off the spawn tile.
      *  Fast (~10ms). */
     public boolean resetEpisode(String playerName, long seed) {
         if (server == null) return false;
@@ -95,14 +112,37 @@ public class WorldOps {
             cm.executeWithPrefix(src,
                 "/fill 48 66 -64 80 70 -32 air replace");
 
-            // Seeded ring: 8 logs at radius 4-6 on top of grass (Y=66), angles jittered by seed
+            // 8×8 flat grid of 64 oak_log at Y=66, seeded ±1 jitter per cell.
+            // Invariants enforced below: in-bounds [48,80]×[-64,-32], all distinct
+            // (x,z), none on the spawn tile (64,-48), all at Y=66 (reachable).
             epRand.setSeed(seed);
-            for (int i = 0; i < 8; i++) {
-                double theta = (2.0 * Math.PI * i / 8.0) + (epRand.nextDouble() - 0.5) * 0.4;
-                int r = 4 + epRand.nextInt(3);              // 4, 5, or 6
-                int x = 64 + (int) Math.round(r * Math.cos(theta));
-                int z = -48 + (int) Math.round(r * Math.sin(theta));
-                cm.executeWithPrefix(src, "/setblock " + x + " 66 " + z + " oak_log");
+            final int SPAWN_X = 64, SPAWN_Z = -48;
+            final int MIN_X = 48, MAX_X = 80, MIN_Z = -64, MAX_Z = -32;
+            java.util.HashSet<Long> used = new java.util.HashSet<>();
+            for (int row = 0; row < 8; row++) {
+                for (int col = 0; col < 8; col++) {
+                    int baseX = 50 + 3 * col;     // 50..71
+                    int baseZ = -62 + 3 * row;    // -62..-41
+                    // Seeded jitter in {-1,0,+1} on each axis.
+                    int x = baseX + (epRand.nextInt(3) - 1);
+                    int z = baseZ + (epRand.nextInt(3) - 1);
+                    // Clamp to arena bounds (defensive; grid+jitter never exceeds).
+                    x = Math.max(MIN_X, Math.min(MAX_X, x));
+                    z = Math.max(MIN_Z, Math.min(MAX_Z, z));
+                    // Resolve collisions with the spawn tile or an already-placed
+                    // log by nudging deterministically through neighbor offsets
+                    // until a free, in-bounds, non-spawn cell is found. The base
+                    // grid has 64 cells in a 22×22 footprint inside a 33×33 arena,
+                    // so a free neighbor always exists.
+                    while ((x == SPAWN_X && z == SPAWN_Z) || used.contains(key(x, z))) {
+                        if (x < MAX_X)      x += 1;
+                        else if (z < MAX_Z) z += 1;
+                        else if (x > MIN_X) x -= 1;
+                        else                z -= 1;
+                    }
+                    used.add(key(x, z));
+                    cm.executeWithPrefix(src, "/setblock " + x + " 66 " + z + " oak_log");
+                }
             }
             return true;
         } catch (Exception e) {
@@ -110,6 +150,11 @@ public class WorldOps {
                 "resetEpisode failed for {} seed={}: {}", playerName, seed, e.getMessage());
             return false;
         }
+    }
+
+    /** Pack (x,z) into a single long for the dedup set used by resetEpisode. */
+    private static long key(int x, int z) {
+        return (((long) x) << 32) ^ (z & 0xffffffffL);
     }
 
     /** One-time setup at server boot when training mode is active. Idempotent.

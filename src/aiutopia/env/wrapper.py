@@ -20,6 +20,7 @@ M1-Pipeline T15:
   - `agent_id_to_player_name` map carried through config (R6) so future
     dispatch_skill calls hit Carpet player_name, not env agent_id.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -35,35 +36,35 @@ from aiutopia.common.config import Paths
 from aiutopia.env.action_mask import compute_gatherer_action_mask
 from aiutopia.env.bridge import FabricBridge
 from aiutopia.env.exploit import ExploitDetector
-from aiutopia.env.reward import compute_reward_stage_1
+from aiutopia.env.reward import _inventory_from_obs, compute_reward_stage_1
 from aiutopia.env.spaces import (
     build_role_action_space,
     build_role_observation_space,
-    CORE_KEYS,
-    GATHERER_KEYS,
-    GOAL_EMBED_DIM,
 )
 from aiutopia.memory.client import open_chroma
 from aiutopia.memory.writer import EpisodicMemoryWriter, EpisodicRecord
 from aiutopia.planner.goal_spec import GoalSpecAdapter
 from aiutopia.schemas.plan import (
-    Constraints, GoalSpecification, Subgoal, TargetState, TerminationConditions,
+    Constraints,
+    GoalSpecification,
+    Subgoal,
+    TargetState,
+    TerminationConditions,
 )
-
 
 log = logging.getLogger(__name__)
 
 
 # ───── _normalize_raw constants (must match spaces.py) ─────
 _AGENT_UUID_EMBED_DIM = 384
-_ROLE_ONE_HOT_DIM     = 4
+_ROLE_ONE_HOT_DIM = 4
 _ROLE_INDEX = {"gatherer": 0, "builder": 1, "farmer": 2, "defender": 3}
-_REACH_RADIUS_BLOCKS  = 4.5   # N16b: bumped 3.0->4.5 to match HarvestSkill/
-                              # DepositChestSkill REACH_RADIUS (vanilla creative
-                              # reach). The 3.0 value re-created the float-precision
-                              # attractor at a different radius — Java side now uses
-                              # full WALK_PER_TICK + 4.5 to eliminate it entirely.
-                              # Action mask uses this to gate HARVEST availability.
+_REACH_RADIUS_BLOCKS = 4.5  # N16b: bumped 3.0->4.5 to match HarvestSkill/
+# DepositChestSkill REACH_RADIUS (vanilla creative
+# reach). The 3.0 value re-created the float-precision
+# attractor at a different radius — Java side now uses
+# full WALK_PER_TICK + 4.5 to eliminate it entirely.
+# Action mask uses this to gate HARVEST availability.
 
 
 def _agent_uuid_embed(uuid_str: str) -> np.ndarray:
@@ -74,7 +75,7 @@ def _agent_uuid_embed(uuid_str: str) -> np.ndarray:
     # Tile 32 bytes → 384 bytes (32 × 12 = 384)
     tiled = (digest * 12)[:_AGENT_UUID_EMBED_DIM]
     arr = np.frombuffer(tiled, dtype=np.uint8).astype(np.float32)
-    return (arr / 127.5) - 1.0   # → [-1, 1]
+    return (arr / 127.5) - 1.0  # → [-1, 1]
 
 
 def _role_one_hot(role_id: str) -> np.ndarray:
@@ -89,18 +90,18 @@ def _normalize_raw(raw: dict) -> dict:
     This converts the auxiliary strings into the gym-shaped fields the obs
     space expects and adds the two action-mask booleans (R4).
     Mutates a copy of `raw`; original is left untouched."""
-    out = dict(raw)   # shallow copy is fine, we don't mutate nested arrays
+    out = dict(raw)  # shallow copy is fine, we don't mutate nested arrays
     # R2: derive agent_uuid_embed + role_one_hot from the auxiliary strings.
     agent_uuid = out.pop("agent_uuid", "")
-    role_id    = out.pop("role_id", "")
+    role_id = out.pop("role_id", "")
     out.pop("agent_name", None)
     out["agent_uuid_embed"] = _agent_uuid_embed(agent_uuid)
-    out["role_one_hot"]     = _role_one_hot(role_id)
+    out["role_one_hot"] = _role_one_hot(role_id)
     # R4: derive in-range booleans for action_mask.
     nrd = float(out.get("nearest_resource_distance", [999.0])[0])
-    ncd = float(out.get("nearest_chest_distance",    [999.0])[0])
+    ncd = float(out.get("nearest_chest_distance", [999.0])[0])
     out["target_resource_in_range"] = nrd <= _REACH_RADIUS_BLOCKS
-    out["target_chest_in_range"]    = ncd <= _REACH_RADIUS_BLOCKS
+    out["target_chest_in_range"] = ncd <= _REACH_RADIUS_BLOCKS
     return out
 
 
@@ -108,9 +109,36 @@ def _role_of(agent_id: str) -> str:
     return agent_id.split("_", 1)[0]
 
 
-def _decode_obs(raw: dict, role: str, stage: int,
-                 action_mask: dict[str, np.ndarray],
-                 goal_embed: np.ndarray) -> dict[str, Any]:
+def _goal_success(goal_spec: GoalSpecification, inventory: dict[str, int]) -> bool:
+    """Phase-0 fix #5 — pure success predicate for SUCCESS-TERMINATION.
+
+    Evaluates the GoalSpec's success condition against a fully-reconstructed
+    `{item_name: count}` inventory dict (built at the call site via
+    reward._inventory_from_obs, the same function the reward path uses, so
+    success and reward never disagree about the bag's contents).
+
+    Currently implements the single `inventory_meets_delta` criterion the M1B
+    gatherer goal encodes (collect 64 oak_log). The check is ABSOLUTE: M1B's
+    reset_episode clears the inventory before every episode, so "delta from
+    empty" == "current count >= target". Semantics are `>=` per item, so extra
+    off-task items (e.g. cobblestone) don't disqualify a met target.
+
+    Returns False — never spuriously True — when:
+      - the goal uses a criterion this helper does not implement (spatial /
+        blueprint / threat target); we are honest about the one we cover, and
+      - the inventory_delta is empty (guards the `all([]) == True` trap so an
+        empty target never reads as an instant win).
+    """
+    tc = goal_spec.termination_conditions
+    if "inventory_meets_delta" not in tc.success_criteria:
+        return False
+    delta = goal_spec.target_state.inventory_delta
+    return bool(delta) and all(inventory.get(item, 0) >= qty for item, qty in delta.items())
+
+
+def _decode_obs(
+    raw: dict, role: str, stage: int, action_mask: dict[str, np.ndarray], goal_embed: np.ndarray
+) -> dict[str, Any]:
     """Coerce a raw JSON dict from Java into a Gymnasium-Dict-conforming
     obs dict. M0 fills missing fields with zeros (Java side may not
     populate all keys yet). M1-Pipeline T15: `goal_embed` is injected by
@@ -135,15 +163,15 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
     metadata = {"name": "aiutopia_minecraft_v0", "render_modes": []}
 
     def __init__(self, config: dict[str, Any]):
-        self.cfg            = config
-        self.active_roles   = list(config["active_roles"])
-        self.agents_init    = [f"{r}_0" for r in self.active_roles]
+        self.cfg = config
+        self.active_roles = list(config["active_roles"])
+        self.agents_init = [f"{r}_0" for r in self.active_roles]
         self.possible_agents = list(self.agents_init)
         self.agents: list[str] = []
-        self.stage          = int(config["stage"])
-        self.tick_warp      = bool(config.get("tick_warp", False))
-        self.max_ticks      = int(config.get("max_episode_ticks", 6_000))
-        self._tick          = 0
+        self.stage = int(config["stage"])
+        self.tick_warp = bool(config.get("tick_warp", False))
+        self.max_ticks = int(config.get("max_episode_ticks", 6_000))
+        self._tick = 0
 
         # N10: per-skill server-side timeout_ticks injected into every action
         # before dispatch. The Java defaults (NAVIGATE/HARVEST = 6000 ticks)
@@ -161,7 +189,8 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
         # WAIT compute duration from scalar_param × MAX_DURATION (~200 ticks).
         default_skill_timeout = {0: 400, 1: 400, 2: 400}
         self.skill_timeout_ticks: dict[int, int] = {
-            int(k): int(v) for k, v in {
+            int(k): int(v)
+            for k, v in {
                 **default_skill_timeout,
                 **dict(config.get("skill_timeout_ticks", {})),
             }.items()
@@ -169,8 +198,7 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
 
         # Pick port from worker index (defaults to first port for tests).
         ports = config["py4j_ports"]
-        widx  = int(getattr(config, "worker_index",
-                            config.get("worker_index", 0))) % len(ports)
+        widx = int(getattr(config, "worker_index", config.get("worker_index", 0))) % len(ports)
         self.bridge = FabricBridge(port=ports[widx])
         self.bridge.open()
 
@@ -192,23 +220,27 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
         try:
             jmap = self.bridge.entry_point.getItemIdNameTable()
             from aiutopia.env import reward as _rwd
+
             before = len(_rwd._ITEM_ID_TO_NAME)
-            _rwd._ITEM_ID_TO_NAME.update(
-                {int(k): str(jmap.get(k)) for k in jmap.keySet()}
-            )
+            _rwd._ITEM_ID_TO_NAME.update({int(k): str(jmap.get(k)) for k in jmap.keySet()})
             after = len(_rwd._ITEM_ID_TO_NAME)
             log.warning(
                 "N9/N14 ItemId table loaded from Java (port=%d): %d entries "
                 "(eager-seed=%d, added=%d)",
-                ports[widx], after, before, after - before,
+                ports[widx],
+                after,
+                before,
+                after - before,
             )
         except Exception as e:
             log.warning(
                 "N9/N14 could not fetch ItemIdNameTable from Java (port=%d): %s "
                 "— falling back to module-level eager seed (%d entries)",
-                ports[widx], e,
-                __import__("aiutopia.env.reward", fromlist=["_ITEM_ID_TO_NAME"])
-                  ._ITEM_ID_TO_NAME.__len__(),
+                ports[widx],
+                e,
+                __import__(
+                    "aiutopia.env.reward", fromlist=["_ITEM_ID_TO_NAME"]
+                )._ITEM_ID_TO_NAME.__len__(),
             )
 
         # M1-Training likely-to-break fix #1: per-worker AIUTOPIA_ROOT so 4
@@ -217,6 +249,7 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
         # worker_index. The root is set BEFORE any Paths.from_env() call below.
         if config.get("aiutopia_root_per_worker", True) and ports:
             import os as _os
+
             base = _os.environ.get("AIUTOPIA_ROOT", "")
             if base:
                 _os.environ["AIUTOPIA_ROOT"] = f"{base.rstrip('/').rstrip(chr(92))}_w{widx}"
@@ -252,7 +285,7 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
                 try:
                     self.bridge.carpet_spawn(player_name, skin="", role=role)
                 except Exception:
-                    pass   # idempotent — already-spawned is OK
+                    pass  # idempotent — already-spawned is OK
 
         # M1-Pipeline T16: per-agent ExploitDetector (5 rules from §5.3).
         self.exploit_detectors: dict[str, ExploitDetector] = {
@@ -271,14 +304,13 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
 
         # Map env agent_id → agent_uuid (ULID) for memory writes. Populated
         # by the caller via config (same shape as agent_id_to_player_name).
-        self.agent_id_to_uuid: dict[str, str] = dict(
-            config.get("agent_id_to_uuid", {})
-        )
+        self.agent_id_to_uuid: dict[str, str] = dict(config.get("agent_id_to_uuid", {}))
 
         # GoalSpecAdapter — M1-Pipeline ships a hardcoded "collect 64 oak_log"
         # goal embedded into every obs. Plan B replaces this with planner-
         # emitted Subgoal objects routed via aiutopia.planner.event_queue.
         from aiutopia.planner.goal_spec import load_bge_small
+
         try:
             bge = load_bge_small()
         except Exception:
@@ -290,6 +322,7 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
             class _ZeroBGE:
                 def encode(self, _text: str) -> np.ndarray:
                     return np.zeros(384, dtype=np.float32)
+
             bge = _ZeroBGE()
         self.goal_adapter = GoalSpecAdapter(bge=bge)
         self._stub_subgoal = Subgoal(
@@ -326,6 +359,7 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
                 self.bridge.reset_episode(player_name, int(seed))
         # Reset exploit detectors for the new episode
         from aiutopia.env.exploit import ExploitDetector
+
         for agent_id in list(self.exploit_detectors.keys()):
             self.exploit_detectors[agent_id] = ExploitDetector()
         self.agents = list(self.agents_init)
@@ -356,8 +390,10 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
             if "timeout_ticks" not in act and skill_type in self.skill_timeout_ticks:
                 act = {**act, "timeout_ticks": int(self.skill_timeout_ticks[skill_type])}
             self.bridge.dispatch_skill(player_name, act, invocation_id)
-            if int(act.get("should_broadcast", 0)) == 1 and np.asarray(
-                    act.get("comm_target_mask", [0, 0, 0, 0])).any():
+            if (
+                int(act.get("should_broadcast", 0)) == 1
+                and np.asarray(act.get("comm_target_mask", [0, 0, 0, 0])).any()
+            ):
                 comm_msgs.append({"sender": player_name, "action": act})
         if comm_msgs:
             self.bridge.flush_comm_batch(comm_msgs)
@@ -371,7 +407,8 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
             try:
                 evt = json.loads(j) if isinstance(j, str) else j
                 env_aid = self._player_name_to_agent_id.get(
-                    evt.get("agentId", ""), evt.get("agentId", ""))
+                    evt.get("agentId", ""), evt.get("agentId", "")
+                )
                 completions_by_agent[env_aid] = evt
             except Exception:
                 continue
@@ -414,7 +451,29 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
                 action=actions.get(agent, {}),
                 env_meta=env_meta,
             )
-            term[agent]  = died_this_tick
+            term[agent] = died_this_tick
+            # Phase-0 fix #5: SUCCESS-TERMINATION. Reward for THIS tick is
+            # already banked above (computed from obs, not from `term`), so
+            # terminating now does not retroactively change the final-step
+            # reward — it just stops the episode so TIME_PENALTY/PBRS stop
+            # accruing past the goal and the policy gets an episodic "win"
+            # signal (terminated=True ⇒ no value bootstrap). Success derives
+            # from the GoalSpec the env already builds (inventory_meets_delta
+            # over inventory_delta); no hardcoded 64. Reuses the SAME
+            # _inventory_from_obs the reward path uses so success and reward
+            # never disagree about the bag. Composes with death (also
+            # terminated) via OR; out_of_bounds (truncation) is handled below.
+            curr_inv = _inventory_from_obs(new_obs.get(agent, {}))
+            # A SUCCESS terminal is one reached ALIVE — if the agent died on
+            # the same tick it crossed the goal, that is a DEATH terminal, so
+            # the eval-runner label (info["goal_success"]) must not call it a
+            # win. term[agent] is already True from death either way, so the
+            # primary contract holds regardless; this only governs the label.
+            goal_success = (not died_this_tick) and _goal_success(
+                self._stub_subgoal.goal_specification, curr_inv
+            )
+            if goal_success:
+                term[agent] = True
             # N19-followup: also truncate when the agent strays out of the
             # seeded arena. v18/v19/v20 inventory probes consistently showed
             # only 1 of 4 instances accumulating oak_log — the other 3
@@ -434,14 +493,17 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
             if agent_pos is not None and len(agent_pos) >= 3:
                 dx = float(agent_pos[0]) - 64.5
                 dz = float(agent_pos[2]) - (-47.5)
-                y  = float(agent_pos[1])
+                y = float(agent_pos[1])
                 if (abs(dx) > 24.0) or (abs(dz) > 24.0) or (y < 60.0):
                     out_of_bounds = True
             trunc[agent] = (self._tick >= self.max_ticks) or out_of_bounds
-            info[agent]  = {
-                "skill_completion":   completion,
-                "exploit_penalties":  [(n.value, p) for n, p in exploit_penalties],
-                "n_clipped":          n_clipped,
+            info[agent] = {
+                "skill_completion": completion,
+                "exploit_penalties": [(n.value, p) for n, p in exploit_penalties],
+                "n_clipped": n_clipped,
+                # Phase-0 fix #5: distinguish a SUCCESS terminal from a DEATH
+                # terminal. The eval runner reads this on the terminal obs.
+                "goal_success": goal_success,
             }
 
             # R7: episodic memory write per tick. Importance heuristic:
@@ -453,22 +515,33 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
             agent_uuid = self.agent_id_to_uuid.get(agent)
             if agent_uuid:  # only write if we have a real ULID (CLI-spawned)
                 abs_r = min(1.0, abs(rew[agent]) / 5.0)
-                completed_bonus = 0.3 if completion.get("resultCode") in {
-                    "COMPLETED", "FAILED_TIMEOUT", "IMMEDIATE_FAILURE",
-                } else 0.0
+                completed_bonus = (
+                    0.3
+                    if completion.get("resultCode")
+                    in {
+                        "COMPLETED",
+                        "FAILED_TIMEOUT",
+                        "IMMEDIATE_FAILURE",
+                    }
+                    else 0.0
+                )
                 death_bonus = 0.4 if died_this_tick else 0.0
                 importance = min(1.0, abs_r + completed_bonus + death_bonus)
-                self.memory_writer.maybe_write(EpisodicRecord(
-                    agent_uuid=agent_uuid,
-                    timestamp=self._tick,
-                    event_type=completion.get("resultCode", "tick"),
-                    participants=[],
-                    importance_score=importance,
-                    summary=(f"r={rew[agent]:.2f} "
-                             f"skill={actions.get(agent, {}).get('skill_type', '?')} "
-                             f"out={completion.get('resultCode', 'RUNNING')}"),
-                    embedding=None,
-                ))
+                self.memory_writer.maybe_write(
+                    EpisodicRecord(
+                        agent_uuid=agent_uuid,
+                        timestamp=self._tick,
+                        event_type=completion.get("resultCode", "tick"),
+                        participants=[],
+                        importance_score=importance,
+                        summary=(
+                            f"r={rew[agent]:.2f} "
+                            f"skill={actions.get(agent, {}).get('skill_type', '?')} "
+                            f"out={completion.get('resultCode', 'RUNNING')}"
+                        ),
+                        embedding=None,
+                    )
+                )
 
         self._prev_obs = new_obs
         self._tick += 1
@@ -479,7 +552,7 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
         """Idempotent close. Without this Ray workers leak Java processes."""
         try:
             self.bridge.close()
-        except Exception:        # nosec - close path
+        except Exception:  # nosec - close path
             log.exception("error closing FabricBridge")
 
     # ───── helpers ─────
@@ -490,22 +563,18 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
             # R6: Java keys obs by Carpet player_name, not env agent_id.
             player_name = self.agent_id_to_player_name.get(agent, agent)
             raw = _normalize_raw(raw_all.get(player_name, {}))
-            mask = (compute_gatherer_action_mask(raw)
-                    if _role_of(agent) == "gatherer"
-                    else {})
-            out[agent] = _decode_obs(raw, _role_of(agent), self.stage, mask,
-                                       self._stub_goal_embed)
+            mask = compute_gatherer_action_mask(raw) if _role_of(agent) == "gatherer" else {}
+            out[agent] = _decode_obs(raw, _role_of(agent), self.stage, mask, self._stub_goal_embed)
         return out
 
     def _next_seed_for_strategy(self) -> int:
         strategy = self.cfg.get("seed_strategy", "fixed_easy")
-        offset = (1
-                  if self.cfg.get("per_worker_seed_offset")
-                  else 0) * int(getattr(self.cfg, "worker_index",
-                                         self.cfg.get("worker_index", 0)))
+        offset = (1 if self.cfg.get("per_worker_seed_offset") else 0) * int(
+            getattr(self.cfg, "worker_index", self.cfg.get("worker_index", 0))
+        )
         seed_table = {
-            "fixed_easy":   1 + offset,
+            "fixed_easy": 1 + offset,
             "fixed_medium": 2 + offset,
-            "fixed_hard":   3 + offset,
+            "fixed_hard": 3 + offset,
         }
         return seed_table.get(strategy, 1 + offset)

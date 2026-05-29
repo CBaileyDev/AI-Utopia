@@ -1,7 +1,6 @@
 """Section 7.1 PPO config builders."""
-from __future__ import annotations
 
-from typing import Any
+from __future__ import annotations
 
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.core.rl_module.multi_rl_module import MultiRLModuleSpec
@@ -11,13 +10,13 @@ from ray.tune.registry import register_env
 from aiutopia.env.spaces import build_role_action_space, build_role_observation_space
 from aiutopia.rl_module.role_rl_module import AiUtopiaRoleRLModule
 
-
 ENV_NAME = "aiutopia_minecraft"
 
 
 def register_aiutopia_env() -> None:
     """Idempotent registration of the env factory with Ray Tune."""
     from aiutopia.train.env_factory import make_aiutopia_env_wrapped
+
     register_env(ENV_NAME, make_aiutopia_env_wrapped)
 
 
@@ -26,36 +25,37 @@ def _policy_mapping_fn(agent_id, episode=None, **kwargs):
     return "gatherer_policy"
 
 
-def m1_gatherer_config(*,
-                        py4j_ports:        tuple[int, ...] = (25001, 25002, 25003, 25004),
-                        num_env_runners:   int = 4,
-                        num_envs_per_env_runner: int = 2,
-                        # N17 finding: with `max_episode_ticks=2000` and the
-                        # 8-log seeded ring placed at episode start, the agent
-                        # depletes the ring in the first ~50-150 env steps and
-                        # then spends the remaining 1850+ steps with zero
-                        # oak_log signal — v18 inventory probes confirmed only
-                        # 1 of 4 instances accumulated oak_log past 22 (the
-                        # other 3 wandered off and mined cobblestone/deepslate).
-                        # Lowered to 300 so the wrapper's reset_episode keeps
-                        # re-placing the ring frequently enough that the on-
-                        # policy buffer is dominated by oak_log-relevant
-                        # trajectories. Eval gate is unchanged (scenarios cap
-                        # at 1000 ticks per Scenario.max_ticks).
-                        max_episode_ticks: int = 300,
-                        seed:              int = 1,
-                        # N13 finding (v16 thread dump): at tick rate 60 (post-N12
-                        # crash fix) per-env-step latency is ~5-7s (vs ~1.4s at
-                        # tick 300). For batch=2048/4 workers = 512 steps/worker
-                        # × 7s = ~60 min/iter, far exceeding sample_timeout_s.
-                        # Shrunk batch 2048→256 + fragment 128→32 so each iter
-                        # cycle is 256/(4*32)=2 fragments × ~7s = ~14s sampling,
-                        # batch fill ~1 min, iter ~3 min. Worse sample efficiency
-                        # but trains end-to-end at tick 60 stability.
-                        rollout_fragment_length: int | str = 32,
-                        sample_timeout_s:        float     = 1800.0,
-                        train_batch_size:        int       = 256,
-                        ) -> PPOConfig:
+def m1_gatherer_config(
+    *,
+    py4j_ports: tuple[int, ...] = (25001, 25002, 25003, 25004),
+    num_env_runners: int = 4,
+    num_envs_per_env_runner: int = 2,
+    # N17 finding: with `max_episode_ticks=2000` and the
+    # 8-log seeded ring placed at episode start, the agent
+    # depletes the ring in the first ~50-150 env steps and
+    # then spends the remaining 1850+ steps with zero
+    # oak_log signal — v18 inventory probes confirmed only
+    # 1 of 4 instances accumulated oak_log past 22 (the
+    # other 3 wandered off and mined cobblestone/deepslate).
+    # Lowered to 300 so the wrapper's reset_episode keeps
+    # re-placing the ring frequently enough that the on-
+    # policy buffer is dominated by oak_log-relevant
+    # trajectories. Eval gate is unchanged (scenarios cap
+    # at 1000 ticks per Scenario.max_ticks).
+    max_episode_ticks: int = 300,
+    seed: int = 1,
+    # N13 finding (v16 thread dump): at tick rate 60 (post-N12
+    # crash fix) per-env-step latency is ~5-7s (vs ~1.4s at
+    # tick 300). For batch=2048/4 workers = 512 steps/worker
+    # × 7s = ~60 min/iter, far exceeding sample_timeout_s.
+    # Shrunk batch 2048→256 + fragment 128→32 so each iter
+    # cycle is 256/(4*32)=2 fragments × ~7s = ~14s sampling,
+    # batch fill ~1 min, iter ~3 min. Worse sample efficiency
+    # but trains end-to-end at tick 60 stability.
+    rollout_fragment_length: int | str = 32,
+    sample_timeout_s: float = 1800.0,
+    train_batch_size: int = 256,
+) -> PPOConfig:
     """Section 7.1 M1 single-agent gatherer PPO config (new API stack)."""
     register_aiutopia_env()
 
@@ -69,14 +69,14 @@ def m1_gatherer_config(*,
         .environment(
             env=ENV_NAME,
             env_config={
-                "stage":                 1,
-                "active_roles":          ["gatherer"],
-                "seed_strategy":         "fixed_easy",
-                "py4j_ports":            list(py4j_ports),
-                "tick_warp":             True,
-                "max_episode_ticks":     max_episode_ticks,
+                "stage": 1,
+                "active_roles": ["gatherer"],
+                "seed_strategy": "fixed_easy",
+                "py4j_ports": list(py4j_ports),
+                "tick_warp": True,
+                "max_episode_ticks": max_episode_ticks,
                 "per_worker_seed_offset": True,
-                "enable_memory_writes":  True,
+                "enable_memory_writes": True,
             },
         )
         .env_runners(
@@ -116,9 +116,22 @@ def m1_gatherer_config(*,
                             "role": "gatherer",
                             "max_seq_len": 32,
                             "actor_hidden": [256],
-                            "core_encoder":    {"core_hidden": [512, 256]},
+                            # Fix #4: mask the DEAD comm heads in single-agent
+                            # M1B. comm_payload (a 128-d diag Gaussian = 256 of
+                            # the 344 action-dist dims) and should_broadcast are
+                            # unused here — the comm OBSERVATION is all-zeros and
+                            # comm has zero env effect — yet PPO maximizes their
+                            # entropy (the unclamped log_std drives the learner
+                            # entropy 198->202->NaN seen in progress.csv). With
+                            # this ON those sub-dists are forced constant:
+                            # ~0 entropy, ~0 KL, ~0 gradient. The action SPACE is
+                            # unchanged (policy still emits a zeroed comm_payload
+                            # + should_broadcast), so the env contract holds and
+                            # M2+ MARL flips this OFF to restore live comm.
+                            "mask_comm": True,
+                            "core_encoder": {"core_hidden": [512, 256]},
                             "shared_backbone": {"lstm_hidden": 256},
-                            "ctde_critic":     {"critic_hidden": 256},
+                            "ctde_critic": {"critic_hidden": 256},
                         },
                     ),
                 },
@@ -139,7 +152,7 @@ def m1_gatherer_config(*,
             # populates within the first few iters that produce
             # episode terminations.
             metrics_num_episodes_for_smoothing=20,
-            keep_per_episode_custom_metrics=True,   # T10 reads exploit_* stats
+            keep_per_episode_custom_metrics=True,  # T10 reads exploit_* stats
         )
         .checkpointing(
             export_native_model_files=True,
