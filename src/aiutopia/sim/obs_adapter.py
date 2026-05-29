@@ -50,6 +50,10 @@ REACH_RADIUS_BLOCKS = 4.5
 SENTINEL_NO_TARGET = 999.0
 INV_SLOTS = 36
 _AGENT_ID = "gatherer_0"
+# N21 Inc1: the agent is equipped with a stone axe each episode (WorldOps.reset-
+# Episode /item replace). The real obs reports item id 826 in inventory slot 0 and
+# in main_hand; the sim must mirror it so the obs the policy sees matches real.
+STONE_AXE_ID = 826
 
 # Captured-arena constants (tests/fixtures/gatherer_obs_trace_seed1.json). These
 # are the real env's M1B-arena values; matching them keeps the constant inputs
@@ -68,13 +72,17 @@ _ROLE_ONE_HOT = np.array([1, 0, 0, 0], dtype=np.int32)  # gatherer
 def _inv_slots(inventory: dict[str, int]) -> tuple[np.ndarray, np.ndarray]:
     """Pack {item_name: count} into (item_ids[36], counts[36]).
 
-    Mirrors how the real fake player's inventory presents after /clear +
-    pickups: items fill from slot 0, each slot stacking to 64 (M1B's 64-oak_log
-    cap fits one slot). Empty slots are id 0, count 0.
+    Mirrors how the real fake player's inventory presents after /clear + the
+    stone-axe equip + pickups: slot 0 holds the stone axe (N21 Inc1), harvested
+    items fill from slot 1, each slot stacking to 64 (M1B's 64-oak_log cap fits one
+    slot). Empty slots are id 0, count 0.
     """
     ids = np.zeros(INV_SLOTS, dtype=np.int32)
     counts = np.zeros(INV_SLOTS, dtype=np.int32)
-    slot = 0
+    # N21 Inc1: slot 0 is the equipped stone axe (real obs slot 0 == 826).
+    ids[0] = STONE_AXE_ID
+    counts[0] = 1
+    slot = 1
     for name, qty in inventory.items():
         remaining = int(qty)
         while remaining > 0 and slot < INV_SLOTS:
@@ -93,25 +101,46 @@ def build_gatherer_obs(world) -> dict:
     bz = int(math.floor(float(world.agent_pos[2])))
 
     # --- spatial (GathererOverlayBuilder parity) ---
+    # The real builder scans each (dx,dz) column TOP-DOWN over dy=+3..-3 and
+    # records the TOPMOST non-air block (ONE per column, then `break`). For our
+    # bare-trunk arena the only blocks are logs, so the topmost block within the
+    # ±3 window is the highest log with dy in [-3,+3]; logs at dy+4 (a 4-tall
+    # trunk's crown, Y=69 from feet Y=65) sit ABOVE the window and are never seen.
+    # We must replicate this per-column-topmost-within-±3 model (NOT per-log), or
+    # the sim diverges from real on stacked trunks (real shows one dy+3 entry per
+    # trunk; a naive per-log scan shows all 4 logs). For the old flat arena this
+    # collapses to the prior behavior (one log/col at dy+1).
     grid = np.zeros((2 * GRID_RADIUS, 2 * GRID_RADIUS, 6), dtype=np.float32)
-    nearby: list[tuple[int, int, int, int]] = []  # (dx, dy, dz, distSq)
+    col_top: dict[tuple[int, int], int] = {}  # (dx,dz) -> topmost log dy in [-3,+3]
     for i in range(world.logs.shape[0]):
         if not bool(world.log_alive[i]):
             continue
         lx, ly, lz = (int(world.logs[i][0]), int(world.logs[i][1]), int(world.logs[i][2]))
-        dx, dy, dz = lx - bx, ly - by, lz - bz  # dy = 66 - 65 = +1
-        if -GRID_RADIUS <= dx < GRID_RADIUS and -GRID_RADIUS <= dz < GRID_RADIUS:
+        dx, dy, dz = lx - bx, ly - by, lz - bz
+        if not (-GRID_RADIUS <= dx < GRID_RADIUS and -GRID_RADIUS <= dz < GRID_RADIUS):
+            continue
+        if not (-3 <= dy <= 3):  # outside the real builder's ±3 vertical scan window
+            continue
+        cur = col_top.get((dx, dz))
+        if cur is None or dy > cur:  # keep the TOPMOST log in the window
+            col_top[(dx, dz)] = dy
+
+    nearby: list[tuple[int, int, int, int]] = []  # (dx, dy, dz, distSq)
+    # Iterate in the real builder's order — dx outer [-16,16), dz inner — so the
+    # stable distSq sort reproduces the equidistant tie-break (the golden trace
+    # caught this on the 8th-nearest tie). Grid marked for every in-grid column
+    # with a topmost log; nearby gated by SCAN_RADIUS (== real lines 64-69).
+    for dx in range(-GRID_RADIUS, GRID_RADIUS):
+        for dz in range(-GRID_RADIUS, GRID_RADIUS):
+            dy = col_top.get((dx, dz))
+            if dy is None:
+                continue
             grid[dx + GRID_RADIUS][dz + GRID_RADIUS][0] = 1.0  # channel 0 = log
             dist_sq = dx * dx + dy * dy + dz * dz
             if math.sqrt(dist_sq) <= SCAN_RADIUS:
                 nearby.append((dx, dy, dz, dist_sq))
 
     g_resource_grid = grid.reshape(-1)  # FLAT (6144,) x-z-c, matches real
-
-    # Tie-break must match Java: GathererOverlayBuilder scans dx∈[-16,16) outer,
-    # dz inner, then stable-sorts by distSq — so equidistant logs keep
-    # (dx, dz)-ascending order. Sort key (distSq, dx, dz) replicates that exactly
-    # (the golden trace caught this on the 8th-nearest tie at distSq=21).
     nearby.sort(key=lambda r: (r[3], r[0], r[2]))
     g_nearest = np.zeros((8, 6), dtype=np.float32)
     for k in range(min(8, len(nearby))):
@@ -156,7 +185,7 @@ def build_gatherer_obs(world) -> dict:
         "hunger": np.array([20.0], dtype=np.float32),
         "saturation": np.array([20.0], dtype=np.float32),
         "armor_value": np.array([0.0], dtype=np.float32),
-        "main_hand_item_id": np.int32(0),
+        "main_hand_item_id": np.int32(STONE_AXE_ID),
         "off_hand_item_id": np.int32(0),
         "goal_ticks_left": np.array([0], dtype=np.int32),
         "time_of_day": np.array([_TIME_OF_DAY], dtype=np.int32),

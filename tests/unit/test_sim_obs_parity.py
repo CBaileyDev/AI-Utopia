@@ -82,11 +82,6 @@ def _assert_step(sim_obs, real_obs, step):
         ), f"step{step} {k}: sim != real (max |Δ|={np.abs(s - r).max():.4f})"
 
 
-@pytest.mark.skip(
-    reason="N21 Inc2: the committed golden trace is the FLAT arena; it is "
-    "regenerated for the 16-trunk tree arena in plan Task 6 (after WorldOps.java "
-    "deploys the tree arena), then this skip is removed."
-)
 @pytest.mark.skipif(
     not FIXTURE.exists(),
     reason="golden fixture not captured yet (needs a live instance once)",
@@ -162,15 +157,16 @@ def test_resource_grid_is_flat_6144_with_16_trunk_columns():
     assert int((g > 0).sum()) == 16
 
 
-def test_nearest_resources_dy_covers_trunk_heights():
+def test_nearest_resources_is_per_column_topmost_within_window():
     nr = np.asarray(_fresh_obs()["g_nearest_resources"])
     assert nr.shape == (8, 6)
-    # N21 Inc2: logs stack Y=66..69, agent obs-y=65 -> dy in {1,2,3,4} ->
-    # dy/8 in {0.125, 0.25, 0.375, 0.5}. The nearest rows are trunk logs, so every
-    # populated dy is a trunk height and the nearest trunk's base (dy=+1) is present.
+    # N21 Inc2: matches GathererOverlayBuilder — ONE entry per (x,z) column at the
+    # TOPMOST log within the ±3 vertical scan, NOT one row per stacked log. For
+    # 4-tall trunks (Y66..69 from feet Y65) that topmost-in-window log is Y68 ->
+    # dy=+3 -> dy/8 = 0.375 for every populated row (the Y69 crown is dy+4, above
+    # the ±3 window, never seen — exactly as real MC reports it).
     populated = nr[np.any(nr != 0.0, axis=1)]
     assert len(populated) >= 1
-    allowed = (0.125, 0.25, 0.375, 0.5)
-    for dy in populated[:, 1]:
-        assert any(abs(float(dy) - a) < 1e-3 for a in allowed), f"dy {dy} not a trunk height"
-    assert np.any(np.abs(populated[:, 1] - 0.125) < 1e-3)  # a trunk base is nearest
+    assert np.allclose(populated[:, 1], 0.375)
+    cols = {(round(float(r[0]), 4), round(float(r[2]), 4)) for r in populated}
+    assert len(cols) == len(populated), "nearest must be per-column, not per stacked log"
