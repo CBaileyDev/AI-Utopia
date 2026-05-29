@@ -70,6 +70,9 @@ def main() -> None:
     parser.add_argument("--num-learners", type=int, default=0,
                         help="Ray Learner processes. 0 runs Learner in driver "
                              "(required on Windows where PyTorch lacks libuv).")
+    parser.add_argument("--backend", default="real", choices=["real", "sim"],
+                        help="env backend: 'real' (live Minecraft via Py4J) or "
+                             "'sim' (headless fast-sim AiUtopiaSimEnv).")
     args = parser.parse_args()
 
     paths = Paths.from_env(); paths.ensure()
@@ -81,6 +84,7 @@ def main() -> None:
              _system_config={"object_spilling_threshold": 0.95})
 
     cfg = m1_gatherer_config(
+        backend=args.backend,
         seed=args.seed,
         num_env_runners=args.num_env_runners,
         num_envs_per_env_runner=args.num_envs_per_runner,

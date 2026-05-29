@@ -11,13 +11,31 @@ from aiutopia.env.spaces import build_role_action_space, build_role_observation_
 from aiutopia.rl_module.role_rl_module import AiUtopiaRoleRLModule
 
 ENV_NAME = "aiutopia_minecraft"
+SIM_ENV_NAME = "aiutopia_sim"
 
 
 def register_aiutopia_env() -> None:
-    """Idempotent registration of the env factory with Ray Tune."""
+    """Idempotent registration of the real-MC env factory with Ray Tune.
+
+    NOTE: imports ``env_factory`` (and thus ``AiUtopiaPettingZooEnv``) lazily so
+    the heavy chromadb / py4j / sentence-transformers deps load only when the
+    REAL backend is selected — the sim backend must never trigger this.
+    """
     from aiutopia.train.env_factory import make_aiutopia_env_wrapped
 
     register_env(ENV_NAME, make_aiutopia_env_wrapped)
+
+
+def register_aiutopia_sim_env() -> None:
+    """Idempotent registration of the FAST-SIM env factory with Ray Tune.
+
+    Mirrors ``register_aiutopia_env`` but imports the import-light
+    ``sim_env_factory`` (only ``AiUtopiaSimEnv``), so selecting the sim backend
+    pulls in NO chroma / py4j / torch-via-env / sentence-transformers.
+    """
+    from aiutopia.train.sim_env_factory import make_aiutopia_sim_env_wrapped
+
+    register_env(SIM_ENV_NAME, make_aiutopia_sim_env_wrapped)
 
 
 def _policy_mapping_fn(agent_id, episode=None, **kwargs):
@@ -27,6 +45,13 @@ def _policy_mapping_fn(agent_id, episode=None, **kwargs):
 
 def m1_gatherer_config(
     *,
+    # "real" -> live Minecraft via FabricBridge/Py4J (default; unchanged).
+    # "sim"  -> the headless fast-sim (AiUtopiaSimEnv): points env= at the sim
+    #           env name, registers ONLY the import-light sim factory, and drops
+    #           the real-MC-only env_config keys (py4j_ports, tick_warp, ...).
+    #           The SAME RLModule/spaces build against the sim env (its declared
+    #           obs/action spaces are byte-identical to the real env's).
+    backend: str = "real",
     # None -> derive one distinct port per runner (25001..25000+num_env_runners).
     # The wrapper maps worker_index % len(py4j_ports) -> port, so len(ports) MUST
     # equal num_env_runners or runners collide onto shared Fabric servers.
@@ -65,12 +90,45 @@ def m1_gatherer_config(
     # sample_timeout_s.)
     train_batch_size: int = 768,
 ) -> PPOConfig:
-    """Section 7.1 M1 single-agent gatherer PPO config (new API stack)."""
-    register_aiutopia_env()
+    """Section 7.1 M1 single-agent gatherer PPO config (new API stack).
 
-    # Derive one Py4J port per runner unless explicitly overridden.
-    if py4j_ports is None:
-        py4j_ports = tuple(25001 + i for i in range(num_env_runners))
+    ``backend`` selects the env:
+      - "real" (default): live Minecraft via Py4J — unchanged behavior.
+      - "sim": the headless ``AiUtopiaSimEnv`` — registers only the import-light
+        sim factory and uses a minimal env_config (no py4j_ports/tick_warp/etc.).
+    """
+    if backend not in ("real", "sim"):
+        raise ValueError(f"backend must be 'real' or 'sim', got {backend!r}")
+
+    if backend == "sim":
+        register_aiutopia_sim_env()
+        env_name = SIM_ENV_NAME
+        # Minimal env_config: only the keys AiUtopiaSimEnv consumes. active_roles
+        # is required (its __init__ KeyErrors without it). The real-MC-only keys
+        # (py4j_ports, tick_warp, seed_strategy, per_worker_seed_offset,
+        # enable_memory_writes) are intentionally dropped — the sim ignores
+        # absent keys cleanly.
+        env_config = {
+            "stage": 1,
+            "active_roles": ["gatherer"],
+            "max_episode_ticks": max_episode_ticks,
+        }
+    else:
+        register_aiutopia_env()
+        env_name = ENV_NAME
+        # Derive one Py4J port per runner unless explicitly overridden.
+        if py4j_ports is None:
+            py4j_ports = tuple(25001 + i for i in range(num_env_runners))
+        env_config = {
+            "stage": 1,
+            "active_roles": ["gatherer"],
+            "seed_strategy": "fixed_easy",
+            "py4j_ports": list(py4j_ports),
+            "tick_warp": True,
+            "max_episode_ticks": max_episode_ticks,
+            "per_worker_seed_offset": True,
+            "enable_memory_writes": True,
+        }
 
     cfg = (
         PPOConfig()
@@ -80,17 +138,8 @@ def m1_gatherer_config(
         )
         .framework("torch")
         .environment(
-            env=ENV_NAME,
-            env_config={
-                "stage": 1,
-                "active_roles": ["gatherer"],
-                "seed_strategy": "fixed_easy",
-                "py4j_ports": list(py4j_ports),
-                "tick_warp": True,
-                "max_episode_ticks": max_episode_ticks,
-                "per_worker_seed_offset": True,
-                "enable_memory_writes": True,
-            },
+            env=env_name,
+            env_config=env_config,
         )
         .env_runners(
             num_env_runners=num_env_runners,

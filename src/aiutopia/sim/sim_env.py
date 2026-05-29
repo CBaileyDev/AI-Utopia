@@ -29,9 +29,17 @@ Termination parity (must match wrapper.AiUtopiaPettingZooEnv.step exactly):
 IMPORT-LIGHT by contract: this module imports only the sibling ``aiutopia.sim``
 modules (world / skills / obs_adapter / reward_adapter), ``aiutopia.env._embeds``
 (``_goal_success`` + ``gatherer_stub_subgoal``), ``aiutopia.env.spaces`` (the Dict
-spaces), and ``aiutopia.env.reward._inventory_from_obs`` (a leaf, pure module) —
-NEVER chromadb / py4j / torch / sentence_transformers. Verify with
-``py -3.11 -c "import aiutopia.sim.sim_env"`` staying fast/clean.
+spaces), ``aiutopia.env.reward._inventory_from_obs`` (a leaf, pure module), and
+``pettingzoo.ParallelEnv`` (the base class the real wrapper subclasses — itself
+import-light: pulls NO torch/chroma/py4j) — NEVER chromadb / py4j / torch /
+sentence_transformers. Verify with ``py -3.11 -c "import aiutopia.sim.sim_env"``
+staying fast/clean.
+
+Phase B (RLlib): ``AiUtopiaSimEnv`` subclasses ``pettingzoo.ParallelEnv`` so it
+is wrappable by ``ray.rllib.env.wrappers.pettingzoo_env.ParallelPettingZooEnv``
+exactly like the real env — the wrapper accesses ``par_env.unwrapped`` (provided
+by ParallelEnv) in ``get_sub_environments``. Like the real wrapper, we do NOT
+call ``super().__init__()`` (ParallelEnv has no required init state).
 
 Tick semantics (parity note): ``world.tick`` is the env-step counter, incremented
 once per ``step``. The simulated walk-ticks consumed inside ``apply_skill`` while
@@ -46,6 +54,7 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from gymnasium.spaces import Dict as DictSpace
+from pettingzoo import ParallelEnv
 
 from aiutopia.env._embeds import _goal_success, gatherer_stub_subgoal
 from aiutopia.env.reward import _inventory_from_obs
@@ -72,8 +81,13 @@ def _role_of(agent_id: str) -> str:
     return agent_id.split("_", 1)[0]
 
 
-class AiUtopiaSimEnv:
-    """PettingZoo-Parallel-shaped headless gatherer sim (single agent for M1B)."""
+class AiUtopiaSimEnv(ParallelEnv):
+    """PettingZoo-Parallel-shaped headless gatherer sim (single agent for M1B).
+
+    Subclasses ``pettingzoo.ParallelEnv`` to match ``AiUtopiaPettingZooEnv`` so
+    ``ParallelPettingZooEnv(AiUtopiaSimEnv(cfg))`` works byte-for-byte the same
+    way as the real env in RLlib. Does not call ``super().__init__()`` (parity
+    with the real wrapper; ParallelEnv has no required init state)."""
 
     metadata: ClassVar[dict] = {"name": "aiutopia_sim_v0", "render_modes": []}
 
