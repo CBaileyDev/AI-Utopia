@@ -41,13 +41,18 @@ not the skill), sim-only, staged to de-risk. **A greedy decision-core policy cle
 - v2 (fixed clusters, commit `6053556`): greedy clears 64/64 — MINE cluster A → ONE
   NAVIGATE hop (mask-forced when blind) → MINE cluster B.
 - v4 (RANDOMIZED clusters + blind-only shaping, commit `f355c9c`): clears 64/64 across
-  3 randomized geometries; **HELD-OUT (novel high-seed geometries) = 3/5 cleared.**
-- The 2/5 held-out failures are the explore-**DIRECTION**: blind explore with **no
-  directional cue** + randomized B-direction → the policy can only learn a direction
-  *prior* (works for common directions, thrashes — NAVIGATE=192 — for others). This is
-  inherent to local blind search; **robust global search is the Explorer/Scout role's
-  job** (roadmap: the Explorer finds + reports resource locations), not the Lumberjack's
-  local decision-core. NO behavior-cloning needed — the earlier "needs BC" was wrong.
+  3 randomized geometries; **HELD-OUT (novel high-seed geometries) = 3/5** — the 2/5
+  failures were the explore-DIRECTION (blind search, no directional signal → the policy
+  learns a direction *prior* that thrashes for uncommon directions).
+- **v5 (directional resource cue, commit `f46af04`): HELD-OUT = 5/5 ✓.** Added a
+  resource-bearing cue (sim-only; reuses the all-zero `g_hostiles_nearby[0]` = unit
+  dir + dist to the nearest alive log, incl. beyond perception) that SIMULATES the
+  future Explorer/Scout role's "wood is that way" report. It makes the decision-core's
+  blind-explore ROBUST across novel geometries — **validating the Explorer→Lumberjack
+  architecture in miniature** (a direction signal → robust explore+select+clear). Zero
+  obs-space/RLModule change. NO behavior-cloning — the earlier "needs BC" was wrong.
+- Caveats: the cue is GROUND-TRUTH (real version needs the actual Explorer role/memory
+  to produce it); trees stays OOD (~60/64 — clusters-only training); single PPO seed.
 - (Mixed trees+clusters training REGRESSED it — trees rarely masks HARVEST so it dilutes
   the explore signal. Train explore on clusters-only.)
 
