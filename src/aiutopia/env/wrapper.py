@@ -23,7 +23,6 @@ M1-Pipeline T15:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 from typing import Any
@@ -33,6 +32,11 @@ from gymnasium.spaces import Dict as DictSpace
 from pettingzoo import ParallelEnv
 
 from aiutopia.common.config import Paths
+from aiutopia.env._embeds import (
+    _agent_uuid_embed,
+    _goal_success,
+    gatherer_stub_subgoal,
+)
 from aiutopia.env.action_mask import compute_gatherer_action_mask
 from aiutopia.env.bridge import FabricBridge
 from aiutopia.env.exploit import ExploitDetector
@@ -44,19 +48,17 @@ from aiutopia.env.spaces import (
 from aiutopia.memory.client import open_chroma
 from aiutopia.memory.writer import EpisodicMemoryWriter, EpisodicRecord
 from aiutopia.planner.goal_spec import GoalSpecAdapter
-from aiutopia.schemas.plan import (
-    Constraints,
-    GoalSpecification,
-    Subgoal,
-    TargetState,
-    TerminationConditions,
-)
 
 log = logging.getLogger(__name__)
 
+# `_agent_uuid_embed` and `_goal_success` are re-exported from `env._embeds`
+# (lifted there so the import-light `aiutopia.sim` package can reuse them
+# without pulling chromadb/py4j/sentence_transformers). They remain importable
+# as `aiutopia.env.wrapper._goal_success` for existing callers/tests.
+__all__ = ["AiUtopiaPettingZooEnv", "_agent_uuid_embed", "_goal_success"]
+
 
 # ───── _normalize_raw constants (must match spaces.py) ─────
-_AGENT_UUID_EMBED_DIM = 384
 _ROLE_ONE_HOT_DIM = 4
 _ROLE_INDEX = {"gatherer": 0, "builder": 1, "farmer": 2, "defender": 3}
 _REACH_RADIUS_BLOCKS = 4.5  # N16b: bumped 3.0->4.5 to match HarvestSkill/
@@ -65,17 +67,6 @@ _REACH_RADIUS_BLOCKS = 4.5  # N16b: bumped 3.0->4.5 to match HarvestSkill/
 # attractor at a different radius — Java side now uses
 # full WALK_PER_TICK + 4.5 to eliminate it entirely.
 # Action mask uses this to gate HARVEST availability.
-
-
-def _agent_uuid_embed(uuid_str: str) -> np.ndarray:
-    """Deterministic 384-d float32 embed from agent UUID string.
-    SHA-256 → 32 bytes → 384 floats (tile to fill) → normalized [-1, 1].
-    Stable across processes (M0 hash() carry-forward + R10)."""
-    digest = hashlib.sha256(uuid_str.encode("utf-8")).digest()  # 32 bytes
-    # Tile 32 bytes → 384 bytes (32 × 12 = 384)
-    tiled = (digest * 12)[:_AGENT_UUID_EMBED_DIM]
-    arr = np.frombuffer(tiled, dtype=np.uint8).astype(np.float32)
-    return (arr / 127.5) - 1.0  # → [-1, 1]
 
 
 def _role_one_hot(role_id: str) -> np.ndarray:
@@ -107,33 +98,6 @@ def _normalize_raw(raw: dict) -> dict:
 
 def _role_of(agent_id: str) -> str:
     return agent_id.split("_", 1)[0]
-
-
-def _goal_success(goal_spec: GoalSpecification, inventory: dict[str, int]) -> bool:
-    """Phase-0 fix #5 — pure success predicate for SUCCESS-TERMINATION.
-
-    Evaluates the GoalSpec's success condition against a fully-reconstructed
-    `{item_name: count}` inventory dict (built at the call site via
-    reward._inventory_from_obs, the same function the reward path uses, so
-    success and reward never disagree about the bag's contents).
-
-    Currently implements the single `inventory_meets_delta` criterion the M1B
-    gatherer goal encodes (collect 64 oak_log). The check is ABSOLUTE: M1B's
-    reset_episode clears the inventory before every episode, so "delta from
-    empty" == "current count >= target". Semantics are `>=` per item, so extra
-    off-task items (e.g. cobblestone) don't disqualify a met target.
-
-    Returns False — never spuriously True — when:
-      - the goal uses a criterion this helper does not implement (spatial /
-        blueprint / threat target); we are honest about the one we cover, and
-      - the inventory_delta is empty (guards the `all([]) == True` trap so an
-        empty target never reads as an instant win).
-    """
-    tc = goal_spec.termination_conditions
-    if "inventory_meets_delta" not in tc.success_criteria:
-        return False
-    delta = goal_spec.target_state.inventory_delta
-    return bool(delta) and all(inventory.get(item, 0) >= qty for item, qty in delta.items())
 
 
 def _decode_obs(
@@ -325,19 +289,11 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
 
             bge = _ZeroBGE()
         self.goal_adapter = GoalSpecAdapter(bge=bge)
-        self._stub_subgoal = Subgoal(
-            role="gatherer",
-            priority=5,
-            goal_specification=GoalSpecification(
-                target_state=TargetState(inventory_delta={"oak_log": 64}),
-                termination_conditions=TerminationConditions(
-                    success_criteria=["inventory_meets_delta"],
-                    timeout_ticks=6000,
-                ),
-            ),
-            constraints=Constraints(),
-            nl_summary="collect 64 oak_log",
-        )
+        # The "collect 64 oak_log" stub Subgoal now lives in env._embeds as the
+        # single source of truth shared with the sim. The wrapper still
+        # BGE-embeds it here (real NL vec when sentence-transformers loads,
+        # zeros via _ZeroBGE otherwise) — byte-identical to the old inline path.
+        self._stub_subgoal = gatherer_stub_subgoal()
         self._stub_goal_embed = self.goal_adapter.embed(self._stub_subgoal).astype(np.float32)
 
     # ───── PettingZoo API ─────
