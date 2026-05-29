@@ -3,11 +3,23 @@
 This supersedes the earlier post-v20 handoff. Read `PROJECT_CONTEXT.md` for the
 big picture; this captures the current frontier.
 
-## ✅ M2 DECISION-CORE (N22, 2026-05-29) — built + VALIDATED as PPO-learnable
+## 🟢 M2 DECISION-CORE (N22, 2026-05-29) — built + DEMONSTRATED (single seed, trained layout)
 
 Executed the advisor/workflow-recommended **Option B pivot** (make the POLICY decide,
-not the skill), sim-only, staged to de-risk. **The policy genuinely LEARNED to
-explore + select + sequence — greedy clears the blind-explore arena 64/64.**
+not the skill), sim-only, staged to de-risk. **A greedy decision-core policy clears the
+2-cluster blind-explore arena 64/64** — a promising proof-of-concept, NOT yet validated.
+
+⚠️ **Two caveats (advisor) — do NOT over-trust this:**
+1. **The perception-based HARVEST mask is load-bearing**, not the policy alone: when
+   nothing is visible the mask *forces* NAVIGATE, so the env (not a learned explore
+   drive) decides "explore now"; the policy only has to not steer the one nav hop badly.
+   The tell that the policy's own nav is WEAK: the OOD **trees=60/64 with NAVIGATE=985/
+   MINE=15** — when the mask doesn't cleanly gate (trunks drift in/out of perception),
+   it thrashes nav and strands a trunk. Honest claim: "decision-core + perception-mask
+   clears the TRAINED layout greedily," not "the policy learned to explore."
+2. **Single seed-1 run on ONE hand-built 2-cluster geometry** = demonstrated, not
+   validated. The OOD trees result shows it's fit to that geometry. Harden before
+   building on it: 2–3 training seeds + held-out cluster placements.
 
 **Built + committed (`e3b8dbb`, `579af7d`):**
 - **Decision-core**: `target_class` reinterpreted as an instance pointer (slot into
@@ -25,10 +37,11 @@ explore + select + sequence — greedy clears the blind-explore arena 64/64.**
 - Tools: `scripts/n21_decision_core_gonogo.py` (scripted demonstrator),
   `scripts/decision_core_rollout.py` (eval).
 
-**✅ RESULT — M2 decision-core VALIDATED as PPO-learnable (NO behavior-cloning needed).**
-A greedy policy clears the 2-cluster **blind-explore** arena **64/64 on seeds 1/2/3**
-(commit `6053556`): MINE cluster A → ONE blind NAVIGATE hop → MINE cluster B. The
-policy genuinely learned **explore-when-blind + instance-selection + sequencing.**
+**🟢 RESULT — decision-core greedily clears the trained blind-explore arena (NO BC needed).**
+A greedy policy clears the 2-cluster arena **64/64 on eval seeds 1/2/3** (commit `6053556`):
+MINE cluster A → ONE NAVIGATE hop (mask-forced when blind) → MINE cluster B. Demonstrates
+the decision-core + perception-mask works; see the two caveats above (mask is load-bearing;
+single training seed/layout). NO behavior-cloning required — the earlier "needs BC" was wrong.
 
 The earlier "needs BC, 4× confirmed" framing was WRONG — a greedy-eval artifact, not
 a learning failure (the advisor caught it from training `ep_len≈90 < cap 300` =
