@@ -183,7 +183,9 @@ class AiUtopiaSimEnv(ParallelEnv):
         infos = {a: {} for a in self.agents}
         return obs, infos
 
-    def _dispatch_decision_core(self, world, action):
+    def _dispatch_decision_core(
+        self, world: SimWorld, action: dict
+    ) -> tuple[SimWorld, dict]:
         """Decision-core dispatch: HARVEST -> MINE the policy-POINTED instance
         only (target_class is the slot index into g_nearest_resources); all other
         skills (NAVIGATE-explore, wait, ...) use the normal skill dynamics."""

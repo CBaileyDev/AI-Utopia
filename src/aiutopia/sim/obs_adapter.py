@@ -94,7 +94,9 @@ def _inv_slots(inventory: dict[str, int]) -> tuple[np.ndarray, np.ndarray]:
     return ids, counts
 
 
-def gatherer_nearest_columns(world):
+def gatherer_nearest_columns(
+    world,
+) -> tuple[dict[tuple[int, int], int], list[tuple[int, int, int, int, int, int]]]:
     """Per-(x,z)-column TOPMOST-log-within-±3 nearest list — the SINGLE source of
     truth for both g_nearest_resources AND the decision-core instance pointer.
 
