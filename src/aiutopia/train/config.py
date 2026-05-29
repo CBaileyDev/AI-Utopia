@@ -126,12 +126,13 @@ def m1_gatherer_config(
                 {
                     # M2: the POLICY drives instance-selection + blind-explore.
                     "decision_core": True,
-                    # "mixed": alternate trees / randomized-clusters per episode so
-                    # the policy generalizes across layouts (not single-geometry
-                    # overfit). randomize_layout already varies the seed per episode.
-                    "arena_mode": "mixed",
+                    # "clusters" (RANDOMIZED per seed): every episode has a blind hop,
+                    # so the explore signal stays dominant (mixed/trees DILUTED it —
+                    # trees rarely masks HARVEST so the policy learned "never explore").
+                    # Randomized cluster placement still addresses single-geometry overfit.
+                    "arena_mode": "clusters",
                     "arena_half": 34.0,         # roam far enough to reach cluster B
-                    "distance_shaping": True,   # PBRS guides the blind-explore hop
+                    "distance_shaping": True,   # blind-only PBRS guides the explore hop
                 }
                 if decision_core
                 else {}

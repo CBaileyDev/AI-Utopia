@@ -75,6 +75,25 @@ def main() -> int:
                 f"    seed={scn.seed}  oak_log={r['oak_log']}/64  steps={r['steps_used']}  "
                 f"NAVIGATE={hist.get('NAVIGATE', 0)}  MINE={hist.get('HARVEST', 0)}  -> {tag}"
             )
+
+    # HELD-OUT clusters: high seeds NOT seen in training (randomize_layout uses
+    # seed=_train_ep ~1..9000), so these are genuinely-novel randomized geometries
+    # -> a true generalization test (not memorized layouts).
+    from aiutopia.train.scenario_runner import Scenario, _gatherer_collected_64_oak_log
+    _p("  -- arena: clusters HELD-OUT (seeds 90001+, novel geometries) --")
+    ec = {"stage": 1, "active_roles": ["gatherer"], "decision_core": True,
+          "arena_mode": "clusters", "arena_half": 34.0, "randomize_layout": False}
+    n_full = 0
+    for s in (90001, 90002, 90003, 90004, 90005):
+        scn = Scenario(name=f"heldout_{s}", seed=s, max_ticks=200,
+                       success=_gatherer_collected_64_oak_log)
+        r = run_instrumented(scn, env_factory=lambda cfg: make_aiutopia_sim_env(cfg),
+                             env_config=ec, rl_module=module, device="cpu", wall_budget_s=120)
+        hist = Counter(e["skill"] for e in r["trace"])
+        n_full += int(r["oak_log"] >= 64)
+        _p(f"    seed={s}  oak_log={r['oak_log']}/64  steps={r['steps_used']}  "
+           f"NAVIGATE={hist.get('NAVIGATE', 0)}  {'CLEARED ✓' if r['oak_log'] >= 64 else 'stuck'}")
+    _p(f">>> held-out generalization: {n_full}/5 novel cluster geometries cleared <<<")
     return 0
 
 

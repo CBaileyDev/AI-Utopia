@@ -248,13 +248,18 @@ class AiUtopiaSimEnv(ParallelEnv):
             }
             rew[agent] = step_reward(obs_prev, obs_curr, action, env_meta)
             if self._distance_shaping:
-                # Distance-REDUCTION shaping toward the nearest alive log: +W·(prev
-                # dist − curr dist). Telescopes to W·(start−end) so it's a γ=1
-                # potential (no inaction drip — standing still earns exactly 0).
-                # The earlier γ·Φ−Φ form, with Φ=−W·dist≤0 and γ<1, paid ~+0.02/step
-                # for sitting in a negative-potential state -> rewarded MINE-spam.
+                # BLIND-ONLY distance-reduction shaping toward the nearest alive log:
+                # only rewarded when NOTHING is in perception (the explore phase), so
+                # it guides the blind hop toward the hidden cluster WITHOUT penalizing
+                # intra-cluster movement (clearing a cluster moves you among trunks,
+                # often AWAY from the far cluster -> net-negative if applied always,
+                # which made the policy MINE-spam). Distance-reduction form telescopes
+                # to W·(dist at blind-start − dist at blind-end): pure "approached the
+                # hidden cluster while exploring" reward, zero inaction drip.
                 phi = _log_potential(world)  # = −W·dist (higher == closer)
-                rew[agent] += phi - self._prev_phi.get(agent, phi)
+                _, _nearby_now = gatherer_nearest_columns(world)
+                if not _nearby_now:  # blind: nothing visible -> guide the explore
+                    rew[agent] += phi - self._prev_phi.get(agent, phi)
                 self._prev_phi[agent] = phi
 
             # 5. SUCCESS termination — same predicate the wrapper uses, over the
