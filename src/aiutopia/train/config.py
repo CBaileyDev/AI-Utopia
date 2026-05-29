@@ -89,6 +89,12 @@ def m1_gatherer_config(
     # updates. (At 4 runners this is 6 rounds/iter — still fine under
     # sample_timeout_s.)
     train_batch_size: int = 768,
+    # M2 decision-core experiment (sim backend only): demote HARVEST to mine the
+    # policy-pointed instance (target_class indexes g_nearest_resources), run the
+    # 2-cluster blind-explore arena, and enable PBRS distance shaping so the
+    # policy can LEARN to explore-when-blind + select. Off => the proven
+    # HARVEST-spam survival-forest path.
+    decision_core: bool = False,
 ) -> PPOConfig:
     """Section 7.1 M1 single-agent gatherer PPO config (new API stack).
 
@@ -116,6 +122,17 @@ def m1_gatherer_config(
             # full layout distribution (not a single-layout overfit); eval/transfer
             # pass fixed seeds and never set this.
             "randomize_layout": True,
+            **(
+                {
+                    # M2: the POLICY drives instance-selection + blind-explore.
+                    "decision_core": True,
+                    "arena_mode": "clusters",   # 2 clusters, >perception gap
+                    "arena_half": 34.0,         # roam far enough to reach cluster B
+                    "distance_shaping": True,   # PBRS guides the blind-explore hop
+                }
+                if decision_core
+                else {}
+            ),
             # N21 Path A: the distance_shaping / failure_penalty / completion_bonus
             # flags were removed — they targeted a "teach the policy to NAVIGATE"
             # fix that is impossible given the obs is blind beyond 16 b (both sim

@@ -110,32 +110,49 @@ class SimWorld:
     inventory: dict = field(default_factory=dict)
     tick: int = 0
 
-    def reset(self, seed: int) -> None:
-        """Reset to the seeded 16-trunk forest, mirroring ``resetEpisode`` exactly."""
+    def reset(self, seed: int, arena_mode: str = "trees") -> None:
+        """Reset to a seeded oak-trunk forest.
+
+        ``arena_mode``:
+          - ``"trees"`` (default): the 4x4 16-trunk grid that mirrors WorldOps.java
+            byte-for-byte (golden-trace + transfer parity). UNCHANGED.
+          - ``"clusters"``: two 8-trunk clusters with a >perception gap between them
+            (cluster A around the spawn = visible; cluster B ~22 blocks south =
+            beyond the 16-block perception). SIM-ONLY M2 experiment that forces the
+            policy to EXPLORE blind from A to discover B. No Java mirror (yet).
+        """
         self.agent_pos = SPAWN_POS.copy()
         self.inventory = {}
         self.tick = 0
 
         rng = _JavaRandom(seed)
-        logs = np.zeros((TREES * TRUNK_H, 3), dtype=np.int64)
-        used: set[tuple[int, int]] = set()
+        bases = (
+            self._cluster_bases(rng) if arena_mode == "clusters" else self._tree_grid_bases(rng)
+        )
+        n = len(bases) * TRUNK_H
+        logs = np.zeros((n, 3), dtype=np.int64)
         idx = 0
-        # Iteration + draw order MUST match WorldOps.java byte-for-byte: row outer
-        # (0..3), col inner (0..3); per trunk draw jitter for x THEN z (two
-        # next_int(3) calls), then stack TRUNK_H logs from LOG_Y up. NO height
-        # draw (fixed 4) -> the RNG draw pattern is the same 2-per-cell surface as
-        # the old flat grid, keeping parity simple.
+        for x, z in bases:  # stack TRUNK_H oak_log per trunk base, LOG_Y .. +TRUNK_H-1
+            for dy in range(TRUNK_H):
+                logs[idx] = (x, LOG_Y + dy, z)
+                idx += 1
+        self.logs = logs
+        self.log_alive = np.ones(n, dtype=bool)
+
+    @staticmethod
+    def _tree_grid_bases(rng: _JavaRandom) -> list[tuple[int, int]]:
+        """16 trunk bases on the 4x4 grid — draw order MUST match WorldOps.java
+        byte-for-byte (row outer 0..3, col inner 0..3, x-jitter THEN z-jitter)."""
+        used: set[tuple[int, int]] = set()
+        bases: list[tuple[int, int]] = []
         for row in range(TREE_GRID):
             for col in range(TREE_GRID):
                 base_x = 52 + 7 * col   # 52,59,66,73
                 base_z = -61 + 7 * row  # -61,-54,-47,-40
                 x = base_x + (rng.next_int(3) - 1)
                 z = base_z + (rng.next_int(3) - 1)
-                # Clamp to arena (defensive; grid+jitter never exceeds).
                 x = max(MIN_X, min(MAX_X, x))
                 z = max(MIN_Z, min(MAX_Z, z))
-                # Resolve collisions with the spawn tile or an already-placed trunk
-                # by nudging deterministically through neighbor offsets.
                 while (x == SPAWN_X and z == SPAWN_Z) or (x, z) in used:
                     if x < MAX_X:
                         x += 1
@@ -146,9 +163,23 @@ class SimWorld:
                     else:
                         z -= 1
                 used.add((x, z))
-                for dy in range(TRUNK_H):  # stack the trunk: LOG_Y .. LOG_Y+TRUNK_H-1
-                    logs[idx] = (x, LOG_Y + dy, z)
-                    idx += 1
+                bases.append((x, z))
+        return bases
 
-        self.logs = logs
-        self.log_alive = np.ones(TREES * TRUNK_H, dtype=bool)
+    @staticmethod
+    def _cluster_bases(rng: _JavaRandom) -> list[tuple[int, int]]:
+        """16 trunk bases in two 8-trunk clusters: A around the spawn (visible),
+        B ~22 blocks south (beyond the 16-block perception) -> the gap forces a
+        blind explore hop. Sim-only M2 experiment (no WorldOps mirror)."""
+        used: set[tuple[int, int]] = set()
+        bases: list[tuple[int, int]] = []
+        for cx, cz in ((58, -48), (58, -72)):  # A visible near spawn; B far south
+            for row in range(2):
+                for col in range(4):
+                    x = cx - 7 + 5 * col + (rng.next_int(3) - 1)  # 51,56,61,66 (+jit)
+                    z = cz - 3 + 6 * row + (rng.next_int(3) - 1)  # cz-3, cz+3 (+jit)
+                    while (x == SPAWN_X and z == SPAWN_Z) or (x, z) in used:
+                        x += 1
+                    used.add((x, z))
+                    bases.append((x, z))
+        return bases

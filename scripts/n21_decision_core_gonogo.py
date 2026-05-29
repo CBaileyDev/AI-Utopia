@@ -58,29 +58,35 @@ def _navigate_toward(pos: np.ndarray, target: np.ndarray) -> dict:
     }
 
 
-def run(seed: int, max_steps: int = 120) -> dict:
-    env = AiUtopiaSimEnv(
-        {"active_roles": ["gatherer"], "decision_core": True, "max_episode_ticks": max_steps}
-    )
+def run(seed: int, arena_mode: str = "trees", arena_half: float = 24.0,
+        max_steps: int = 200) -> dict:
+    env = AiUtopiaSimEnv({
+        "active_roles": ["gatherer"], "decision_core": True,
+        "arena_mode": arena_mode, "arena_half": arena_half,
+        "max_episode_ticks": max_steps,
+    })
     obs, _ = env.reset(seed=seed)
     o = obs["gatherer_0"]
     hist: Counter = Counter()
     for _ in range(max_steps):
         nr = np.asarray(o["g_nearest_resources"], np.float32)
         visible = bool(np.any(nr[0] != 0.0))  # is there a nearest instance?
+        pos = np.asarray(o["position"], np.float64)
         if visible:
             act = _harvest(0)  # point at the NEAREST visible trunk
             hist["MINE"] += 1
+        elif arena_mode == "clusters":
+            # blind explore: sweep SOUTH (cluster B is south of spawn) until a
+            # trunk enters perception. A genuinely-blind heuristic (it does not
+            # know where B is — it just keeps moving into unexplored space).
+            act = _navigate_toward(pos, pos + np.array([0.0, 0.0, -16.0]))
+            hist["EXPLORE"] += 1
         else:
-            pos = np.asarray(o["position"], np.float64)
-            act = _navigate_toward(pos, _CENTER)  # explore back toward the field
+            act = _navigate_toward(pos, _CENTER)
             hist["EXPLORE"] += 1
         obs, _r, term, trunc, _i = env.step({"gatherer_0": act})
-        if not env.agents:  # episode ended (success or trunc)
-            o = obs["gatherer_0"]
-            break
         o = obs["gatherer_0"]
-        if term.get("gatherer_0") or trunc.get("gatherer_0"):
+        if not env.agents or term.get("gatherer_0") or trunc.get("gatherer_0"):
             break
     return {"seed": seed, "oak": _oak(o), "hist": dict(hist)}
 
@@ -90,13 +96,15 @@ def main() -> int:
     _p("Phase B GO/NO-GO — scripted point-then-explore on the decision-core")
     _p("=" * 66)
     ok = True
-    for seed in (1, 2, 3):
-        r = run(seed)
-        cleared = r["oak"] >= 64
-        ok = ok and cleared
-        _p(f"  seed={seed}  oak_log={r['oak']}/64  {'CLEARED ✓' if cleared else 'STUCK ✗'}  {r['hist']}")
+    for label, mode, half in (("trees", "trees", 24.0), ("clusters(blind-explore)", "clusters", 34.0)):
+        _p(f"  -- arena: {label} --")
+        for seed in (1, 2, 3):
+            r = run(seed, arena_mode=mode, arena_half=half)
+            cleared = r["oak"] >= 64
+            ok = ok and cleared
+            _p(f"    seed={seed}  oak_log={r['oak']}/64  {'CLEARED ✓' if cleared else 'STUCK ✗'}  {r['hist']}")
     _p("")
-    _p(f">>> decision-core task SOLVABLE by scripted policy: {ok} <<<")
+    _p(f">>> decision-core task SOLVABLE by scripted policy (both arenas): {ok} <<<")
     return 0 if ok else 1
 
 

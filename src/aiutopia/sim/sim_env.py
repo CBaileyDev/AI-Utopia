@@ -58,7 +58,7 @@ from gymnasium.spaces import Dict as DictSpace
 from pettingzoo import ParallelEnv
 
 from aiutopia.env._embeds import _goal_success, gatherer_stub_subgoal
-from aiutopia.env.reward import _inventory_from_obs
+from aiutopia.env.reward import GAMMA, _inventory_from_obs
 from aiutopia.env.spaces import (
     build_role_action_space,
     build_role_observation_space,
@@ -80,6 +80,23 @@ _ARENA_FLOOR_Y = 60.0
 
 def _role_of(agent_id: str) -> str:
     return agent_id.split("_", 1)[0]
+
+
+# Distance-shaping weight (training-only PBRS). In DECISION-CORE mode the POLICY
+# drives navigation, so a potential Φ = -W·dist_to_nearest_alive_log gives a
+# learnable gradient toward resources the policy can't yet see (the blind-explore
+# hop between clusters) WITHOUT changing the optimal policy (PBRS is invariant).
+# This is the right tool here, unlike the old HARVEST-spam path where the skill
+# auto-walked and shaping made no difference.
+_SHAPING_W = 0.1
+
+
+def _log_potential(world: SimWorld) -> float:
+    alive = world.log_alive
+    if not bool(alive.any()):
+        return 0.0
+    d = world.logs[alive].astype(np.float64) - world.agent_pos
+    return -_SHAPING_W * float(np.sqrt((d * d).sum(axis=1)).min())
 
 
 class AiUtopiaSimEnv(ParallelEnv):
@@ -129,6 +146,16 @@ class AiUtopiaSimEnv(ParallelEnv):
         # the sequence, and to NAVIGATE/explore when nothing is in perception.
         # Off by default (preserves the proven HARVEST-spam M1B/survival path).
         self._decision_core = bool(config.get("decision_core", False))
+        # M2 arena: "trees" (default, the Java-mirrored 4x4 grid) or "clusters"
+        # (sim-only blind-explore experiment). arena_half widens the OOB
+        # truncation box so a bigger arena (clusters: B ~27 blocks south of spawn)
+        # is reachable instead of truncating the agent before it can explore there.
+        self._arena_mode = str(config.get("arena_mode", "trees"))
+        self._arena_half = float(config.get("arena_half", _ARENA_HALF))
+        # Training-only PBRS toward the nearest alive log (see _log_potential) —
+        # guides the decision-core policy's blind-explore. Off by default.
+        self._distance_shaping = bool(config.get("distance_shaping", False))
+        self._prev_phi: dict[str, float] = {}
 
     # ───── PettingZoo API ─────
     def observation_space(self, agent: str) -> DictSpace:
@@ -149,8 +176,9 @@ class AiUtopiaSimEnv(ParallelEnv):
         obs: dict[str, dict] = {}
         for agent in self.agents:
             world = self.worlds[agent]
-            world.reset(int(seed))
+            world.reset(int(seed), arena_mode=self._arena_mode)
             obs[agent] = build_gatherer_obs(world)
+            self._prev_phi[agent] = _log_potential(world)
         self._prev_obs = obs
         infos = {a: {} for a in self.agents}
         return obs, infos
@@ -208,6 +236,10 @@ class AiUtopiaSimEnv(ParallelEnv):
                 "exploit_penalties": [],  # Phase A: no exploit detector in sim
             }
             rew[agent] = step_reward(obs_prev, obs_curr, action, env_meta)
+            if self._distance_shaping:  # PBRS toward nearest alive log (blind-explore)
+                phi = _log_potential(world)
+                rew[agent] += GAMMA * phi - self._prev_phi.get(agent, phi)
+                self._prev_phi[agent] = phi
 
             # 5. SUCCESS termination — same predicate the wrapper uses, over the
             # shared stub goal ({oak_log: 64}). _inventory_from_obs is the SAME
@@ -224,7 +256,7 @@ class AiUtopiaSimEnv(ParallelEnv):
                 dx = float(pos[0]) - _ARENA_CENTER_X
                 dz = float(pos[2]) - _ARENA_CENTER_Z
                 y = float(pos[1])
-                if (abs(dx) > _ARENA_HALF) or (abs(dz) > _ARENA_HALF) or (y < _ARENA_FLOOR_Y):
+                if (abs(dx) > self._arena_half) or (abs(dz) > self._arena_half) or (y < _ARENA_FLOOR_Y):
                     out_of_bounds = True
             trunc[agent] = (world.tick >= self.max_episode_ticks) or out_of_bounds
 

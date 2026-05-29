@@ -73,6 +73,10 @@ def main() -> None:
     parser.add_argument("--backend", default="real", choices=["real", "sim"],
                         help="env backend: 'real' (live Minecraft via Py4J) or "
                              "'sim' (headless fast-sim AiUtopiaSimEnv).")
+    parser.add_argument("--decision-core", action="store_true",
+                        help="M2 (sim only): demote HARVEST to pointer-MINE + run the "
+                             "2-cluster blind-explore arena + PBRS shaping, so the "
+                             "POLICY learns instance-selection + explore-when-blind.")
     args = parser.parse_args()
 
     paths = Paths.from_env(); paths.ensure()
@@ -88,6 +92,7 @@ def main() -> None:
         seed=args.seed,
         num_env_runners=args.num_env_runners,
         num_envs_per_env_runner=args.num_envs_per_runner,
+        decision_core=args.decision_core,
     )
     # Override num_learners for Windows-libuv compat (T7.5 finding).
     if args.num_learners == 0:
