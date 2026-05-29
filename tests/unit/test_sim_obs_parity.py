@@ -82,6 +82,11 @@ def _assert_step(sim_obs, real_obs, step):
         ), f"step{step} {k}: sim != real (max |Δ|={np.abs(s - r).max():.4f})"
 
 
+@pytest.mark.skip(
+    reason="N21 Inc2: the committed golden trace is the FLAT arena; it is "
+    "regenerated for the 16-trunk tree arena in plan Task 6 (after WorldOps.java "
+    "deploys the tree arena), then this skip is removed."
+)
 @pytest.mark.skipif(
     not FIXTURE.exists(),
     reason="golden fixture not captured yet (needs a live instance once)",
@@ -148,19 +153,24 @@ def test_obs_keys_match_real_format():
     assert set(_fresh_obs().keys()) == _REAL_OBS_KEYS
 
 
-def test_resource_grid_is_flat_6144_with_64_logs():
+def test_resource_grid_is_flat_6144_with_16_trunk_columns():
     g = np.asarray(_fresh_obs()["g_resource_grid"])
     assert g.shape == (6144,)  # FLAT, matching the real obs (not (32,32,6))
     assert set(np.unique(g)).issubset({0.0, 1.0})
-    assert int((g > 0).sum()) == 64  # all 64 logs light a grid cell post-reset
+    # N21 Inc2: 16 vertical trunks — each trunk's 4 logs share one (x,z) grid
+    # cell, so exactly 16 cells light up (the flat (x,z) projection of the forest).
+    assert int((g > 0).sum()) == 16
 
 
-def test_nearest_resources_dy_is_plus_one():
+def test_nearest_resources_dy_covers_trunk_heights():
     nr = np.asarray(_fresh_obs()["g_nearest_resources"])
     assert nr.shape == (8, 6)
-    # logs sit at y=66, agent at obs-y=65 -> dy=+1 -> dy/8 = 0.125 for every
-    # populated row (col index 1). This is the off-by-one the golden trace
-    # confirmed against real MC.
+    # N21 Inc2: logs stack Y=66..69, agent obs-y=65 -> dy in {1,2,3,4} ->
+    # dy/8 in {0.125, 0.25, 0.375, 0.5}. The nearest rows are trunk logs, so every
+    # populated dy is a trunk height and the nearest trunk's base (dy=+1) is present.
     populated = nr[np.any(nr != 0.0, axis=1)]
     assert len(populated) >= 1
-    assert np.allclose(populated[:, 1], 0.125)
+    allowed = (0.125, 0.25, 0.375, 0.5)
+    for dy in populated[:, 1]:
+        assert any(abs(float(dy) - a) < 1e-3 for a in allowed), f"dy {dy} not a trunk height"
+    assert np.any(np.abs(populated[:, 1] - 0.125) < 1e-3)  # a trunk base is nearest

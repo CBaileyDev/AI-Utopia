@@ -1,8 +1,10 @@
 """SimWorld: fast headless world state for the gatherer M1B task.
 
 Mirrors ``WorldOps.resetEpisode`` (fabric_mod/.../bridge/WorldOps.java) exactly:
-an 8x8 flat grid of 64 oak_log at Y=66, seeded +-1 jitter per cell, clamped to
-the arena, dedup-nudged off the spawn tile and off already-placed cells.
+16 vertical BARE oak trunks (4 logs each, Y=66..69 = 64 logs total) on a 4x4
+spaced grid, seeded +-1 (x,z) jitter per trunk, clamped to the arena, dedup-nudged
+off the spawn tile and off already-placed trunks. (N21 Inc2: was a flat 8x8
+single-log grid.) Trunk height 4 <= REACH so every log is ground-reachable.
 
 IMPORT-LIGHT by contract: this module imports only ``dataclasses`` and ``numpy``
 -- never chromadb / py4j / torch / sentence_transformers (verified by the focused
@@ -32,7 +34,15 @@ SPAWN_Z = -48
 MIN_X, MAX_X = 48, 80
 MIN_Z, MAX_Z = -64, -32
 LOG_Y = 66
-GRID = 8  # 8x8 = 64 logs
+GRID = 8  # legacy: 8x8 == 64 (kept so logs/log_alive default factories size to 64)
+
+# N21 Inc2: the arena is 16 vertical BARE oak trunks (4 logs each, Y=66..69),
+# replacing the flat 8x8 single-log grid. Total stays 64 (gate target unchanged).
+# Trunk height 4 <= REACH (4.5) so a ground-standing agent reaches every log
+# (no climbing). No leaves (collidable -> would block the real-MC walk).
+TREE_GRID = 4                   # 4x4 trunk grid
+TREES = TREE_GRID * TREE_GRID   # 16 trunks
+TRUNK_H = 4                     # logs per trunk (16 * 4 == 64)
 
 # Agent spawn as reported in obs-space. Java teleports to (64, 66, -48) but the
 # fake player settles onto the grass top (block-top Y=65 -> feet Y=65) and obs
@@ -100,27 +110,30 @@ class SimWorld:
     tick: int = 0
 
     def reset(self, seed: int) -> None:
-        """Reset to the seeded 64-log arena, mirroring ``resetEpisode`` exactly."""
+        """Reset to the seeded 16-trunk forest, mirroring ``resetEpisode`` exactly."""
         self.agent_pos = SPAWN_POS.copy()
         self.inventory = {}
         self.tick = 0
 
         rng = _JavaRandom(seed)
-        logs = np.zeros((GRID * GRID, 3), dtype=np.int64)
+        logs = np.zeros((TREES * TRUNK_H, 3), dtype=np.int64)
         used: set[tuple[int, int]] = set()
         idx = 0
-        # Iteration order MUST match Java: row outer (0..7), col inner (0..7),
-        # and per cell draw jitter for x THEN z (two next_int(3) calls).
-        for row in range(GRID):
-            for col in range(GRID):
-                base_x = 50 + 3 * col  # 50..71
-                base_z = -62 + 3 * row  # -62..-41
+        # Iteration + draw order MUST match WorldOps.java byte-for-byte: row outer
+        # (0..3), col inner (0..3); per trunk draw jitter for x THEN z (two
+        # next_int(3) calls), then stack TRUNK_H logs from LOG_Y up. NO height
+        # draw (fixed 4) -> the RNG draw pattern is the same 2-per-cell surface as
+        # the old flat grid, keeping parity simple.
+        for row in range(TREE_GRID):
+            for col in range(TREE_GRID):
+                base_x = 52 + 7 * col   # 52,59,66,73
+                base_z = -61 + 7 * row  # -61,-54,-47,-40
                 x = base_x + (rng.next_int(3) - 1)
                 z = base_z + (rng.next_int(3) - 1)
                 # Clamp to arena (defensive; grid+jitter never exceeds).
                 x = max(MIN_X, min(MAX_X, x))
                 z = max(MIN_Z, min(MAX_Z, z))
-                # Resolve collisions with the spawn tile or an already-placed log
+                # Resolve collisions with the spawn tile or an already-placed trunk
                 # by nudging deterministically through neighbor offsets.
                 while (x == SPAWN_X and z == SPAWN_Z) or (x, z) in used:
                     if x < MAX_X:
@@ -132,8 +145,9 @@ class SimWorld:
                     else:
                         z -= 1
                 used.add((x, z))
-                logs[idx] = (x, LOG_Y, z)
-                idx += 1
+                for dy in range(TRUNK_H):  # stack the trunk: LOG_Y .. LOG_Y+TRUNK_H-1
+                    logs[idx] = (x, LOG_Y + dy, z)
+                    idx += 1
 
         self.logs = logs
-        self.log_alive = np.ones(GRID * GRID, dtype=bool)
+        self.log_alive = np.ones(TREES * TRUNK_H, dtype=bool)

@@ -1,18 +1,33 @@
 import numpy as np
 
-from aiutopia.sim.world import SimWorld
+from aiutopia.sim.world import LOG_Y, TREES, TRUNK_H, SimWorld
 
 
-def test_reset_places_64_logs_flat_at_y66_in_bounds():
+def test_reset_places_16_trunks_of_height_4_totaling_64_logs():
+    # N21 Inc2: the arena is now 16 vertical bare oak trunks (4 logs each,
+    # Y=66..69), not a flat 8x8 single-log grid. Total stays 64 (gate unchanged).
+    assert TREES * TRUNK_H == 64
     w = SimWorld()
     w.reset(seed=1)
     assert w.logs.shape == (64, 3)  # (x, y, z) per log
-    assert np.all(w.logs[:, 1] == 66)  # all flat at y=66
+    # Group logs by (x, z) column -> exactly TREES trunks, each a full stack.
+    cols: dict[tuple[int, int], list[int]] = {}
+    for x, y, z in w.logs.tolist():
+        cols.setdefault((int(x), int(z)), []).append(int(y))
+    assert len(cols) == TREES, f"expected {TREES} trunks, got {len(cols)}"
+    for (x, z), ys in cols.items():
+        assert sorted(ys) == [LOG_Y + d for d in range(TRUNK_H)]  # 66,67,68,69
+
+
+def test_reset_logs_in_bounds_and_off_spawn():
+    w = SimWorld()
+    w.reset(seed=1)
     xs, zs = w.logs[:, 0], w.logs[:, 2]
     assert np.all((xs >= 48) & (xs <= 80))  # arena x-bounds
     assert np.all((zs >= -64) & (zs <= -32))  # arena z-bounds
-    assert len({(int(x), int(z)) for x, z in zip(xs, zs, strict=False)}) == 64  # all distinct (x,z)
-    assert not np.any((xs == 64) & (zs == -48))  # none on spawn tile
+    # trunk tops (Y=69) are within the ground-standing reach (REACH=4.5)
+    assert np.all(w.logs[:, 1] <= LOG_Y + TRUNK_H - 1)
+    assert not np.any((xs == 64) & (zs == -48))  # no trunk on the spawn tile
 
 
 def test_reset_agent_at_spawn_and_empty_inventory():
