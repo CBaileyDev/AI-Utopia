@@ -1,7 +1,7 @@
 """SimWorld: fast headless world state for the gatherer M1B task.
 
 Mirrors ``WorldOps.resetEpisode`` (fabric_mod/.../bridge/WorldOps.java) exactly:
-16 vertical BARE oak trunks (4 logs each, Y=66..69 = 64 logs total) on a 4x4
+16 vertical BARE oak trunks (4 logs each, Y=65..68 = 64 logs total) on a 4x4
 spaced grid, seeded +-1 (x,z) jitter per trunk, clamped to the arena, dedup-nudged
 off the spawn tile and off already-placed trunks. (N21 Inc2: was a flat 8x8
 single-log grid.) Trunk height 4 <= REACH so every log is ground-reachable.
@@ -33,10 +33,11 @@ SPAWN_X = 64
 SPAWN_Z = -48
 MIN_X, MAX_X = 48, 80
 MIN_Z, MAX_Z = -64, -32
-LOG_Y = 66
+LOG_Y = 65  # N21: trunk BASE on the grass (grass top is Y=65); was 66 = floating
+            # one air block above the ground. A 4-tall trunk is now Y=65..68.
 GRID = 8  # legacy: 8x8 == 64 (kept so logs/log_alive default factories size to 64)
 
-# N21 Inc2: the arena is 16 vertical BARE oak trunks (4 logs each, Y=66..69),
+# N21 Inc2: the arena is 16 vertical BARE oak trunks (4 logs each, Y=65..68),
 # replacing the flat 8x8 single-log grid. Total stays 64 (gate target unchanged).
 # Trunk height 4 <= REACH (4.5) so a ground-standing agent reaches every log
 # (no climbing). No leaves (collidable -> would block the real-MC walk).

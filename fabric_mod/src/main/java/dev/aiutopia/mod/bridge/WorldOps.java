@@ -92,16 +92,16 @@ public class WorldOps {
      *
      *  REACHABILITY (see HarvestSkill.java): REACH_RADIUS=4.5; the skill has no
      *  climb/jump and findNearest PREFERS the ground band dy ∈ [-2,+1]. A 4-tall
-     *  trunk (Y=66..69) is nonetheless FULLY clearable, EMPIRICALLY VERIFIED (N21,
+     *  trunk (Y=65..68) is nonetheless FULLY clearable, EMPIRICALLY VERIFIED (N21,
      *  scripts/n21_breaktiming_determinism.py: all seeds reach 64/64 deterministic-
      *  ally): findNearest's pass-2 reaches the upper logs, and after the base logs
      *  are broken the agent walks INTO the cleared column (horizontal→0) so the top
      *  log (Y=69 center 69.5, vertical 4.5 from feet Y=65) is within REACH. Do NOT
-     *  exceed height 4 without a climb model — taller tops are out of reach from
+     *  exceed height 4 without a climb model — tops above Y=68 are out of reach from
      *  the ground (the seed-3 reachability trap).
      *
      *  Layout: 16 trunks on a 4×4 grid spaced 7 — x = 52+7*col (52..73),
-     *  z = -61+7*row (-61..-40), each a 4-log stack at Y=66..69, all inside
+     *  z = -61+7*row (-61..-40), each a 4-log stack at Y=65..68, all inside
      *  [48,80]×[-64,-32]. The grid straddles the spawn tile (64,-48). Each trunk
      *  gets a seeded ±1 (x,z) jitter (so eval seeds 1/2/3 differ); jittered coords
      *  are clamped, unique, and off the spawn tile. MUST match sim/world.py
@@ -118,10 +118,12 @@ public class WorldOps {
             // bare hand. /item replace guarantees the main hand each episode.
             cm.executeWithPrefix(src, "/item replace entity " + playerName
                 + " weapon.mainhand with minecraft:stone_axe");
+            // Clear from Y=65 (trunk base, on the grass) up so last episode's
+            // logs — including the Y=65 base — are removed before re-placing.
             cm.executeWithPrefix(src,
-                "/fill 48 66 -64 80 70 -32 air replace");
+                "/fill 48 65 -64 80 70 -32 air replace");
 
-            // N21 Inc2: 16 vertical BARE oak trunks (4 logs each, Y=66..69) on a
+            // N21 Inc2: 16 vertical BARE oak trunks (4 logs each, Y=65..68) on a
             // 4×4 spaced grid, seeded ±1 (x,z) jitter per trunk. MUST match
             // sim/world.py reset() BYTE-FOR-BYTE: identical base formulas, the
             // SAME nextInt(3) draw order (x THEN z), identical clamp + dedup-nudge,
@@ -154,10 +156,11 @@ public class WorldOps {
                         else                z -= 1;
                     }
                     used.add(key(x, z));
-                    // Stack the trunk: oak_log at Y=66 .. 66+TRUNK_H-1.
+                    // Stack the trunk: oak_log at Y=65 (base, on the grass) ..
+                    // 65+TRUNK_H-1 (=Y=68 for height 4). Rooted, not floating.
                     for (int dy = 0; dy < TRUNK_H; dy++) {
                         cm.executeWithPrefix(src,
-                            "/setblock " + x + " " + (66 + dy) + " " + z + " oak_log");
+                            "/setblock " + x + " " + (65 + dy) + " " + z + " oak_log");
                     }
                 }
             }
