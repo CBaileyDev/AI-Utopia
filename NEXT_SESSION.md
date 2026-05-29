@@ -3,6 +3,50 @@
 This supersedes the earlier post-v20 handoff. Read `PROJECT_CONTEXT.md` for the
 big picture; this captures the current frontier.
 
+## ✅✅✅ SURVIVAL-FOREST FIDELITY MILESTONE COMPLETE (2026-05-29, N21)
+
+The Lumberjack now harvests **real vertical oak trees at survival speed** and the
+sim→real gate **PASSES 3/3 on the tree forest** — the fast-sim methodology proven
+under genuine survival mechanics. Two increments, both transferred with **NO
+retrain** (the HARVEST-spam policy is robust to the OOD tree obs):
+
+- **Increment 1 — survival break-timing + stone axe** (`877789a`): `HarvestSkill`
+  mines each oak log for 15 ticks (stone axe, ~0.75 s) instead of instant/creative;
+  `WorldOps` equips a stone axe each episode. Real gate **3/3** (~23 s/scenario),
+  deterministic. Spike-verified (`scripts/n21_breaktiming_determinism.py`).
+- **Increment 2 — real capped-height bare oak trees** (`99e7b96`, `cec7d1b`,
+  `12b248b`): flat 8×8 log grid → **16 vertical 4-tall bare oak trunks** (64 logs)
+  on a 4×4 jittered grid, in both `WorldOps.java` and `sim/world.py` with
+  byte-faithful `_JavaRandom` parity (**verified seed-for-seed on seeds 1/2/3**:
+  16 identical trunk columns). Obs parity fixed (golden trace regenerated +
+  un-skipped, 204 tests green): real `GathererOverlayBuilder` reports per-(x,z)-
+  column **topmost log within the ±3 vertical scan** (4-tall trunk → dy+3=0.375,
+  the Y69 crown is above the window, never seen) + the stone axe in inv slot 0
+  (id 826). Real gate **3/3** on trees (~38 s/scenario), deterministic.
+
+Reproduce: warm instance-1 (`NUM_INSTANCES=1 JDK_HOME=… bash
+scripts/launch-training-instances.sh`), then `scripts/transfer_eval.py`. The
+survival-forest jar is deployed to **all 12 instance dirs**.
+
+### ⚠️ Known fidelity gaps (harmless now; bite at M2 — read before extending)
+These are **masked only because the policy ignores the obs and the skill does all
+the spatial/sequencing work** (so the gate validates skill+sim PARITY, not policy
+learning). They become real the moment a future (M2) policy *consumes* the obs or
+*decides* harvest sequencing:
+1. **The sim still instant-breaks** (plan Task 3 was skipped — transfer passed
+   without it). The sim does NOT model survival harvest *timing*; only the real
+   `HarvestSkill` does. Sim episodes are shorter than real per dispatch.
+2. **The sim agent moves in full 3D** (`_walk_into_reach` can float up toward a
+   log) while the real fake player is **ground-bound**. They agree on *outcome*
+   for ≤4-tall trunks ONLY because real reaches the top log by walking into the
+   cleared column after breaking the base. A taller trunk (or a policy that
+   reasons about reach) would expose the divergence — do NOT raise trunk height
+   past 4 without a climb model + making the sim ground-bound.
+Spec/plan: `docs/superpowers/specs/2026-05-29-gatherer-survival-forest-fidelity-design.md`,
+`docs/superpowers/plans/2026-05-29-gatherer-survival-forest-fidelity.md`.
+
+---
+
 ## ✅✅ M1B SOLVED — sim→real gate PASSES 3/3 (2026-05-29, N21)
 
 A gatherer policy **trained entirely in the headless sim clears the REAL Minecraft
