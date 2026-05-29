@@ -29,7 +29,68 @@ closed) plus a possible real-MC motor-reach limit.
   it to "stone" → 0 collected). After this, **transfer = 2/3 (seeds 1,2 = 64/64;
   seed 3 = 55/64)**.
 
+## ⛔ UPDATE 2026-05-29 (N21 FINAL) — TRUE root cause: OBSERVATION BLINDNESS. STOP reward tuning. DESIGN DECISION NEEDED.
+
+Three reward-engineering re-trains (v5 PBRS shaping, v6 +failure_penalty, v7
++completion_bonus +entropy) **all produced the identical HARVEST-only greedy
+policy** (seed1=64 ✓, seed2=62, seed3=55, `end=TICK_LIMIT`, NAVIGATE=0). That
+invariance was the tell. The real cause, confirmed directly:
+
+**At the stall the observation is ALL ZEROS.** Probed seed2/seed3 stall states:
+`g_nearest_resources` all-zero, `g_resource_grid` all-zero, `g_richness_score=0`
+— the tail logs (19.5 b / 16.1 b away) are **invisible to the policy**. Cause:
+`obs_adapter.py:47-48` `GRID_RADIUS = SCAN_RADIUS = 16`, and the docstring says
+this **mirrors the real Java `GathererOverlayBuilder` (golden-trace validated)**.
+So **both sim and real are blind beyond 16 blocks.** You cannot reward a policy
+to navigate to something it cannot perceive — v5/v6/v7 were doomed a priori.
+
+**This also means the bounded-skills change (v4, `624da53`) was a wrong turn.**
+The REAL HarvestSkill *internally chains* (it re-scans + walks as it runs, so the
+SKILL sees logs the policy's obs can't), clearing the whole field in ONE dispatch
+on easy layouts — that's how the original transfer hit 2/3 (seeds 1,2 = 64/64,
+real). v4 bounded HARVEST to one 400-tick dispatch to "force navigation," which
+(a) the obs can't support, and (b) doesn't match how real MC clears the field.
+The real seed3 residual (55/64) is the **Java HarvestSkill motor/reach limit**
+(the `dy=+3` tail + ground-preference `dy∈[-2,+1]`, REACH 4.5) — a skill/motor
+gap, NOT a policy navigation gap. NB: the sim's flat-y world doesn't even model
+that dy limit, so sim seed3 can reach 64 via forced nav while real cannot — a
+separate fidelity gap.
+
+### DESIGN FORK — needs a human call (do NOT auto-spend on this)
+- **(A) Real-faithful path — RECOMMENDED for M1B.** Revert the bounded-skills
+  change → sim HARVEST chains like real (clears the field in one dispatch).
+  Accept the policy is HARVEST-only (correct — that's what real does). The only
+  remaining 3/3 blocker is seed3's tail → fix the **Java HarvestSkill** (extend
+  vertical reach / add a hop so chaining reaches the `dy=+3` tail).
+  `minecraft-modding-and-server-specialist`. Lowest risk, matches reality,
+  isolates the last blocker to one Java change. Returns to the 2/3 baseline first.
+- **(B) Navigation path.** Widen the observation (Java `GathererOverlayBuilder`
+  AND `obs_adapter` to ±24 arena) so the policy can see + navigate to distant
+  resources; keep bounded skills; re-validate golden trace; re-train. Bigger
+  change, alters the obs contract — but the wider obs is exactly what the future
+  **Explorer/Scout** role needs, so it may be worth doing once, deliberately.
+- **(C) SEARCH-based blind exploration** when obs is empty — most complex, defer.
+
+### State on `origin/main` (all committed + pushed, `851aff7`)
+- `scripts/sim_rollout_check.py` — greedy rollout w/ skill histogram + `end=`.
+- Sim has `distance_shaping`/`failure_penalty`/`completion_bonus` flags (all
+  training-only, eval-neutral). **They are harmless but inert given the obs
+  blindness** — leave them off (or remove) under path (A). Config currently has
+  them ON for the sim backend.
+- v5/v6/v7 checkpoints under `runs/aiutopia_M1_seed1/PPO_aiutopia_sim_*`.
+
+### Two env gotchas that burned time (heed)
+- **Windows PYTHONPATH uses `;` not `:`** — `src:scripts` is one bogus entry →
+  `aiutopia` unimportable → `RLModule.from_checkpoint` silently returns a base
+  class. Use `PYTHONPATH=src` (script dir auto on `sys.path`).
+- **Cold `from_checkpoint` returns a base RLModule** unless the concrete module
+  is imported first (`import aiutopia.rl_module.role_rl_module`).
+
+---
+
 ## UPDATE 2026-05-29 (N21) — gap #2 root cause CONFIRMED, fix re-training
+(SUPERSEDED by the FINAL update above — the "policy-learning gap" framing was
+correct that nav is needed, but missed that the obs makes nav unlearnable.)
 
 The bounded-skills work below is committed. New, decisive findings this session:
 
