@@ -51,7 +51,7 @@ def main() -> int:
         env_config = {
             "stage": 1,
             "active_roles": ["gatherer"],
-            "decision_core": True,
+            "decision_core": True, "resource_bearing_cue": True,
             "arena_mode": arena_mode,
             "arena_half": arena_half,
             "randomize_layout": False,
@@ -81,7 +81,7 @@ def main() -> int:
     # -> a true generalization test (not memorized layouts).
     from aiutopia.train.scenario_runner import Scenario, _gatherer_collected_64_oak_log
     _p("  -- arena: clusters HELD-OUT (seeds 90001+, novel geometries) --")
-    ec = {"stage": 1, "active_roles": ["gatherer"], "decision_core": True,
+    ec = {"stage": 1, "active_roles": ["gatherer"], "decision_core": True, "resource_bearing_cue": True,
           "arena_mode": "clusters", "arena_half": 34.0, "randomize_layout": False}
     n_full = 0
     for s in (90001, 90002, 90003, 90004, 90005):

@@ -133,6 +133,10 @@ def m1_gatherer_config(
                     "arena_mode": "clusters",
                     "arena_half": 34.0,         # roam far enough to reach cluster B
                     "distance_shaping": True,   # blind-only PBRS guides the explore hop
+                    # Explorer-report sim: directional cue to the nearest resource
+                    # (even beyond perception) -> the policy explores the RIGHT way,
+                    # closing the blind-explore-direction gap (2/5 held-out failures).
+                    "resource_bearing_cue": True,
                 }
                 if decision_core
                 else {}

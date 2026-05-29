@@ -142,8 +142,17 @@ def gatherer_nearest_columns(
     return col_top, nearby
 
 
-def build_gatherer_obs(world, harvest_mask_on_perception: bool = False) -> dict:
+def build_gatherer_obs(
+    world, harvest_mask_on_perception: bool = False, resource_bearing_cue: bool = False
+) -> dict:
     """Build the gatherer obs dict from SimWorld state, matching the real obs.
+
+    ``resource_bearing_cue`` (M2, sim-only experiment): repurpose g_hostiles_nearby
+    row 0 as a UNIT DIRECTION + distance to the nearest alive log — even one BEYOND
+    perception. This simulates the future Explorer/Scout role's "wood is that way"
+    report; it gives the decision-core policy a directional signal for the blind
+    explore hop (which it otherwise lacks → 2/5 held-out geometries thrash). Default
+    False = the field stays all-zeros (matches the real no-hostiles obs / golden trace).
 
     ``harvest_mask_on_perception`` (decision-core): when True, HARVEST/MINE is
     masked-VALID whenever a resource is in PERCEPTION (g_nearest non-empty), not
@@ -166,6 +175,20 @@ def build_gatherer_obs(world, harvest_mask_on_perception: bool = False) -> dict:
     g_richness = np.float32(min(1.0, len(nearby) / 64.0))
     nearest_res_dist = math.sqrt(nearby[0][5]) if nearby else SENTINEL_NO_TARGET
     nearest_chest_dist = SENTINEL_NO_TARGET  # no chest in the M1B arena
+
+    # M2 resource-bearing cue (Explorer-report sim): g_hostiles_nearby[0] =
+    # [unit dx, unit dz, dist/64, valid] toward the nearest alive log (ground truth,
+    # incl. beyond perception). Off -> all zeros (real/golden-trace behavior).
+    g_hostiles = np.zeros((4, 4), dtype=np.float32)
+    if resource_bearing_cue:
+        alive = world.log_alive
+        if bool(alive.any()):
+            d = world.logs[alive].astype(np.float64) - world.agent_pos
+            dist = np.sqrt((d * d).sum(axis=1))
+            j = int(np.argmin(dist))
+            dx, dz = float(d[j][0]), float(d[j][2])
+            norm = max(1.0, math.hypot(dx, dz))
+            g_hostiles[0] = [dx / norm, dz / norm, min(1.0, float(dist[j]) / 64.0), 1.0]
 
     inv_ids, inv_counts = _inv_slots(world.inventory)
 
@@ -195,7 +218,7 @@ def build_gatherer_obs(world, harvest_mask_on_perception: bool = False) -> dict:
         "g_resource_grid": g_resource_grid,
         "g_nearest_resources": g_nearest,
         "g_richness_score": g_richness,
-        "g_hostiles_nearby": np.zeros((4, 4), dtype=np.float32),
+        "g_hostiles_nearby": g_hostiles,
         "action_mask": mask,
         # near-constant / noise fields (not golden-asserted; defaults)
         "velocity": np.zeros(3, dtype=np.float32),

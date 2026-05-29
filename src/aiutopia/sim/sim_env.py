@@ -156,6 +156,10 @@ class AiUtopiaSimEnv(ParallelEnv):
         # guides the decision-core policy's blind-explore. Off by default.
         self._distance_shaping = bool(config.get("distance_shaping", False))
         self._prev_phi: dict[str, float] = {}
+        # M2 resource-bearing cue (Explorer-report sim): feed a direction-to-nearest
+        # -resource into g_hostiles_nearby[0] so the policy can explore the RIGHT way
+        # (closes the blind-explore-direction gap). Sim-only experiment.
+        self._resource_bearing_cue = bool(config.get("resource_bearing_cue", False))
 
     # ───── PettingZoo API ─────
     def observation_space(self, agent: str) -> DictSpace:
@@ -177,7 +181,7 @@ class AiUtopiaSimEnv(ParallelEnv):
         for agent in self.agents:
             world = self.worlds[agent]
             world.reset(int(seed), arena_mode=self._arena_mode)
-            obs[agent] = build_gatherer_obs(world, harvest_mask_on_perception=self._decision_core)
+            obs[agent] = build_gatherer_obs(world, harvest_mask_on_perception=self._decision_core, resource_bearing_cue=self._resource_bearing_cue)
             self._prev_phi[agent] = _log_potential(world)
         self._prev_obs = obs
         infos = {a: {} for a in self.agents}
@@ -237,7 +241,7 @@ class AiUtopiaSimEnv(ParallelEnv):
             world.tick += 1
 
             # 3. Build the post-step obs (byte-faithful gatherer obs adapter).
-            obs_curr = build_gatherer_obs(world, harvest_mask_on_perception=self._decision_core)
+            obs_curr = build_gatherer_obs(world, harvest_mask_on_perception=self._decision_core, resource_bearing_cue=self._resource_bearing_cue)
             new_obs[agent] = obs_curr
             obs_prev = self._prev_obs.get(agent, obs_curr)
 
