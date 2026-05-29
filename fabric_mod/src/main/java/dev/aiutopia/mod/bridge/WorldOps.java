@@ -87,21 +87,25 @@ public class WorldOps {
      *
      *  P0 fix: the M1B eval gate is "collect 64 oak_log in one episode," but the
      *  old reset seeded only 8 logs with no refill, making the gate unmeetable by
-     *  construction. We now place exactly 64 oak_log per episode, all flat at Y=66.
+     *  construction. We place exactly 64 oak_log per episode (N21 Inc2: as 16
+     *  vertical 4-tall trunks, was a flat single-log grid).
      *
      *  REACHABILITY (see HarvestSkill.java): REACH_RADIUS=4.5; the skill has no
-     *  climb/jump (horizontal move only) and findNearest PREFERS ground-level
-     *  matches dy ∈ [-2,+1]. The agent stands at Y=66, so logs MUST be flat at
-     *  Y=66 (dy=0, squarely in the preferred shell) — NEVER stacked vertically,
-     *  or they become deprioritized and unreachable.
+     *  climb/jump and findNearest PREFERS the ground band dy ∈ [-2,+1]. A 4-tall
+     *  trunk (Y=66..69) is nonetheless FULLY clearable, EMPIRICALLY VERIFIED (N21,
+     *  scripts/n21_breaktiming_determinism.py: all seeds reach 64/64 deterministic-
+     *  ally): findNearest's pass-2 reaches the upper logs, and after the base logs
+     *  are broken the agent walks INTO the cleared column (horizontal→0) so the top
+     *  log (Y=69 center 69.5, vertical 4.5 from feet Y=65) is within REACH. Do NOT
+     *  exceed height 4 without a climb model — taller tops are out of reach from
+     *  the ground (the seed-3 reachability trap).
      *
-     *  Layout: an 8×8 grid with 3-block spacing — x = 50+3*col (50..71),
-     *  z = -62+3*row (-62..-41) = 64 distinct cells, all inside [48,80]×[-64,-32].
-     *  The grid straddles the spawn tile (64,-48) so the agent is among the logs.
-     *  Each cell gets a seeded ±1 jitter for per-episode variety (so eval seeds
-     *  1/2/3 differ and the policy can't memorize one layout); jittered coords are
-     *  clamped to the arena and guaranteed unique + off the spawn tile.
-     *  Fast (~10ms). */
+     *  Layout: 16 trunks on a 4×4 grid spaced 7 — x = 52+7*col (52..73),
+     *  z = -61+7*row (-61..-40), each a 4-log stack at Y=66..69, all inside
+     *  [48,80]×[-64,-32]. The grid straddles the spawn tile (64,-48). Each trunk
+     *  gets a seeded ±1 (x,z) jitter (so eval seeds 1/2/3 differ); jittered coords
+     *  are clamped, unique, and off the spawn tile. MUST match sim/world.py
+     *  reset() byte-for-byte (draw order). Fast (~10ms). */
     public boolean resetEpisode(String playerName, long seed) {
         if (server == null) return false;
         try {
@@ -117,28 +121,32 @@ public class WorldOps {
             cm.executeWithPrefix(src,
                 "/fill 48 66 -64 80 70 -32 air replace");
 
-            // 8×8 flat grid of 64 oak_log at Y=66, seeded ±1 jitter per cell.
-            // Invariants enforced below: in-bounds [48,80]×[-64,-32], all distinct
-            // (x,z), none on the spawn tile (64,-48), all at Y=66 (reachable).
+            // N21 Inc2: 16 vertical BARE oak trunks (4 logs each, Y=66..69) on a
+            // 4×4 spaced grid, seeded ±1 (x,z) jitter per trunk. MUST match
+            // sim/world.py reset() BYTE-FOR-BYTE: identical base formulas, the
+            // SAME nextInt(3) draw order (x THEN z), identical clamp + dedup-nudge,
+            // and a FIXED height 4 (no height draw — keeps the RNG draw pattern the
+            // same 2-per-trunk surface). 16×4 = 64 logs (gate unchanged); height 4
+            // ≤ REACH 4.5 so every log is ground-reachable (no climbing); NO leaves
+            // (collidable — would block the straight-line agent.move walk).
             epRand.setSeed(seed);
             final int SPAWN_X = 64, SPAWN_Z = -48;
             final int MIN_X = 48, MAX_X = 80, MIN_Z = -64, MAX_Z = -32;
+            final int TREE_GRID = 4, TRUNK_H = 4;
             java.util.HashSet<Long> used = new java.util.HashSet<>();
-            for (int row = 0; row < 8; row++) {
-                for (int col = 0; col < 8; col++) {
-                    int baseX = 50 + 3 * col;     // 50..71
-                    int baseZ = -62 + 3 * row;    // -62..-41
-                    // Seeded jitter in {-1,0,+1} on each axis.
+            for (int row = 0; row < TREE_GRID; row++) {
+                for (int col = 0; col < TREE_GRID; col++) {
+                    int baseX = 52 + 7 * col;     // 52,59,66,73
+                    int baseZ = -61 + 7 * row;    // -61,-54,-47,-40
+                    // Seeded jitter in {-1,0,+1} on each axis (x THEN z).
                     int x = baseX + (epRand.nextInt(3) - 1);
                     int z = baseZ + (epRand.nextInt(3) - 1);
-                    // Clamp to arena bounds (defensive; grid+jitter never exceeds).
                     x = Math.max(MIN_X, Math.min(MAX_X, x));
                     z = Math.max(MIN_Z, Math.min(MAX_Z, z));
                     // Resolve collisions with the spawn tile or an already-placed
-                    // log by nudging deterministically through neighbor offsets
-                    // until a free, in-bounds, non-spawn cell is found. The base
-                    // grid has 64 cells in a 22×22 footprint inside a 33×33 arena,
-                    // so a free neighbor always exists.
+                    // trunk by nudging deterministically through neighbor offsets.
+                    // 16 trunks spaced 7 apart in a 33×33 arena -> a free cell
+                    // always exists.
                     while ((x == SPAWN_X && z == SPAWN_Z) || used.contains(key(x, z))) {
                         if (x < MAX_X)      x += 1;
                         else if (z < MAX_Z) z += 1;
@@ -146,7 +154,11 @@ public class WorldOps {
                         else                z -= 1;
                     }
                     used.add(key(x, z));
-                    cm.executeWithPrefix(src, "/setblock " + x + " 66 " + z + " oak_log");
+                    // Stack the trunk: oak_log at Y=66 .. 66+TRUNK_H-1.
+                    for (int dy = 0; dy < TRUNK_H; dy++) {
+                        cm.executeWithPrefix(src,
+                            "/setblock " + x + " " + (66 + dy) + " " + z + " oak_log");
+                    }
                 }
             }
             return true;
