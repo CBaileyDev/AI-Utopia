@@ -140,8 +140,15 @@ def gatherer_nearest_columns(world):
     return col_top, nearby
 
 
-def build_gatherer_obs(world) -> dict:
-    """Build the gatherer obs dict from SimWorld state, matching the real obs."""
+def build_gatherer_obs(world, harvest_mask_on_perception: bool = False) -> dict:
+    """Build the gatherer obs dict from SimWorld state, matching the real obs.
+
+    ``harvest_mask_on_perception`` (decision-core): when True, HARVEST/MINE is
+    masked-VALID whenever a resource is in PERCEPTION (g_nearest non-empty), not
+    only within REACH — because the decision-core MINE walks to the pointed
+    instance. This makes greedy decode MINE a visible trunk and NAVIGATE only when
+    blind (the correct explore behavior). Default False = the in-reach mask the
+    real obs / golden trace use (unchanged)."""
     # --- spatial (GathererOverlayBuilder parity; see gatherer_nearest_columns) ---
     col_top, nearby = gatherer_nearest_columns(world)
     grid = np.zeros((2 * GRID_RADIUS, 2 * GRID_RADIUS, 6), dtype=np.float32)
@@ -164,7 +171,10 @@ def build_gatherer_obs(world) -> dict:
     mask = compute_gatherer_action_mask(
         {
             "inv_slot_counts": inv_counts.tolist(),
-            "target_resource_in_range": nearest_res_dist <= REACH_RADIUS_BLOCKS,
+            "target_resource_in_range": (
+                bool(nearby) if harvest_mask_on_perception
+                else nearest_res_dist <= REACH_RADIUS_BLOCKS
+            ),
             "target_chest_in_range": nearest_chest_dist <= REACH_RADIUS_BLOCKS,
             "health": 20.0,
         }

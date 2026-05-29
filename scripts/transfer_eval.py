@@ -69,7 +69,7 @@ SKILL_NAMES = {
 # Per-scenario wall-clock cap. The task budgets ~20 min/scenario worst case;
 # a good policy success-terminates in a few minutes (~64-200 steps). This cap
 # only fires on a pathological loop so we report behavior instead of hanging.
-WALL_BUDGET_S = 20 * 60
+WALL_BUDGET_S = float(os.environ.get("TRANSFER_WALL_CAP_S", 20 * 60))
 
 
 def _p(msg: str) -> None:
@@ -242,7 +242,9 @@ def run_instrumented(
                     out = rl_module._forward_inference(
                         {Columns.OBS: batched, Columns.STATE_IN: state_in}
                     )
-                action = _greedy_decode(out[Columns.ACTION_DIST_INPUTS][0])
+                action = _greedy_decode(
+                    out[Columns.ACTION_DIST_INPUTS][0], agent_obs.get("action_mask")
+                )
                 actions[agent_id] = action
                 step_skill[agent_id] = int(action["skill_type"])
                 new_states[agent_id] = {
@@ -330,6 +332,10 @@ def main() -> int:
 
     from aiutopia.train.scenario_runner import M1_SCENARIOS
 
+    # Fast-iteration knob: TRANSFER_SEEDS=3 runs only seed 3 (the failing one);
+    # default runs the full 3-seed gate. (Wall cap via TRANSFER_WALL_CAP_S.)
+    _want_seeds = {int(s) for s in os.environ.get("TRANSFER_SEEDS", "1,2,3").split(",")}
+
     # ── 3. SIM CONTROL (cheap; partitions loading-bug vs transfer-gap) ──
     _p("")
     _p("[control] running SIM control episode (seed 1) with the LOADED policy …")
@@ -378,6 +384,8 @@ def main() -> int:
     _p("[real] running 3 M1_SCENARIOS against REAL Minecraft (Py4J 25001) …")
     real_results = []
     for scn in M1_SCENARIOS:
+        if scn.seed not in _want_seeds:
+            continue
         _p(f"[real] -> {scn.name} (seed={scn.seed}, max_ticks={scn.max_ticks}, "
            f"wall_cap={WALL_BUDGET_S/60:.0f}min) …")
         r = run_instrumented(

@@ -175,7 +175,9 @@ def run_scenario(scenario: Scenario, *, env_config: dict, rl_module, device: str
                             Columns.STATE_IN: state_in,
                         }
                     )
-                actions[agent_id] = _greedy_decode(out[Columns.ACTION_DIST_INPUTS][0])
+                actions[agent_id] = _greedy_decode(
+                    out[Columns.ACTION_DIST_INPUTS][0], agent_obs.get("action_mask")
+                )
                 # State out is (B, H); squeeze batch dim back to (H,)
                 new_states[agent_id] = {k: v.squeeze(0) for k, v in out[Columns.STATE_OUT].items()}
             states = new_states
@@ -214,12 +216,19 @@ def run_scenario(scenario: Scenario, *, env_config: dict, rl_module, device: str
         env.close()
 
 
-def _greedy_decode(action_dist_inputs):
+def _greedy_decode(action_dist_inputs, action_mask=None):
     """Convert 344-d flat dist-inputs to an action Dict (matching GathererActorHead).
 
     Slice order is alphabetical (post-T7.5 fix):
       comm_payload, comm_target_mask, scalar_param, should_broadcast,
       skill_type, spatial_param, target_class.
+
+    ``action_mask`` (optional, the obs ``action_mask`` dict): when given, the
+    ``skill_type`` argmax respects the mask (masked skills get -inf), so greedy
+    decode can't pick a known-invalid skill — e.g. HARVEST when no resource is in
+    reach is masked, forcing NAVIGATE so the policy actually explores. Without this
+    the rare-but-correct NAVIGATE the policy learned is suppressed by argmax (the
+    N22 decision-core greedy-vs-sampled gap).
     """
     import torch
 
@@ -232,10 +241,14 @@ def _greedy_decode(action_dist_inputs):
     flat = action_dist_inputs
     offset = 0
 
-    def take_logits(n):
+    def take_logits(n, mask=None):
         nonlocal offset
         out = flat[offset : offset + n]
         offset += n
+        if mask is not None:
+            mt = torch.as_tensor(np.asarray(mask), dtype=torch.bool, device=out.device)
+            if bool(mt.any()):  # don't blank everything if the mask is all-zero
+                out = out.masked_fill(~mt, float("-inf"))
         return int(torch.argmax(out).item())
 
     def take_gauss(d):
@@ -256,7 +269,8 @@ def _greedy_decode(action_dist_inputs):
     comm_target_mask = take_multi_binary(4)  # +8
     scalar_param = take_gauss(1)  # +2
     should_broadcast = take_logits(2)  # +2
-    skill_type = take_logits(N_GATHERER_SKILLS)  # +6
+    _skill_mask = action_mask.get("skill_type") if action_mask else None
+    skill_type = take_logits(N_GATHERER_SKILLS, mask=_skill_mask)  # +6 (mask-aware)
     spatial_param = take_gauss(3)  # +6
     target_class = take_logits(N_TARGET_CLASSES_PER_ROLE)  # +64
 

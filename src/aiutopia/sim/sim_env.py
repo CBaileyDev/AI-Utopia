@@ -58,7 +58,7 @@ from gymnasium.spaces import Dict as DictSpace
 from pettingzoo import ParallelEnv
 
 from aiutopia.env._embeds import _goal_success, gatherer_stub_subgoal
-from aiutopia.env.reward import GAMMA, _inventory_from_obs
+from aiutopia.env.reward import _inventory_from_obs
 from aiutopia.env.spaces import (
     build_role_action_space,
     build_role_observation_space,
@@ -177,7 +177,7 @@ class AiUtopiaSimEnv(ParallelEnv):
         for agent in self.agents:
             world = self.worlds[agent]
             world.reset(int(seed), arena_mode=self._arena_mode)
-            obs[agent] = build_gatherer_obs(world)
+            obs[agent] = build_gatherer_obs(world, harvest_mask_on_perception=self._decision_core)
             self._prev_phi[agent] = _log_potential(world)
         self._prev_obs = obs
         infos = {a: {} for a in self.agents}
@@ -218,13 +218,24 @@ class AiUtopiaSimEnv(ParallelEnv):
             # explore, wait, ...) uses the normal skill dynamics.
             if self._decision_core:
                 world, completion = self._dispatch_decision_core(world, action)
+                # CLAMP the agent inside the arena instead of OOB-TERMINATING the
+                # episode. OOB-truncation was implicitly PUNISHING exploration
+                # (wander out -> episode dies -> the policy learns NAVIGATE is fatal
+                # -> greedy collapses to MINE-spam). Clamping lets the policy explore
+                # safely (it just stops at the wall) so NAVIGATE can be learned.
+                world.agent_pos[0] = float(np.clip(
+                    world.agent_pos[0], _ARENA_CENTER_X - self._arena_half,
+                    _ARENA_CENTER_X + self._arena_half))
+                world.agent_pos[2] = float(np.clip(
+                    world.agent_pos[2], _ARENA_CENTER_Z - self._arena_half,
+                    _ARENA_CENTER_Z + self._arena_half))
             else:
                 world, completion = apply_skill(world, action)
             # 2. env-step counter (one tick per step; walk-ticks NOT counted).
             world.tick += 1
 
             # 3. Build the post-step obs (byte-faithful gatherer obs adapter).
-            obs_curr = build_gatherer_obs(world)
+            obs_curr = build_gatherer_obs(world, harvest_mask_on_perception=self._decision_core)
             new_obs[agent] = obs_curr
             obs_prev = self._prev_obs.get(agent, obs_curr)
 
@@ -236,9 +247,14 @@ class AiUtopiaSimEnv(ParallelEnv):
                 "exploit_penalties": [],  # Phase A: no exploit detector in sim
             }
             rew[agent] = step_reward(obs_prev, obs_curr, action, env_meta)
-            if self._distance_shaping:  # PBRS toward nearest alive log (blind-explore)
-                phi = _log_potential(world)
-                rew[agent] += GAMMA * phi - self._prev_phi.get(agent, phi)
+            if self._distance_shaping:
+                # Distance-REDUCTION shaping toward the nearest alive log: +W·(prev
+                # dist − curr dist). Telescopes to W·(start−end) so it's a γ=1
+                # potential (no inaction drip — standing still earns exactly 0).
+                # The earlier γ·Φ−Φ form, with Φ=−W·dist≤0 and γ<1, paid ~+0.02/step
+                # for sitting in a negative-potential state -> rewarded MINE-spam.
+                phi = _log_potential(world)  # = −W·dist (higher == closer)
+                rew[agent] += phi - self._prev_phi.get(agent, phi)
                 self._prev_phi[agent] = phi
 
             # 5. SUCCESS termination — same predicate the wrapper uses, over the
