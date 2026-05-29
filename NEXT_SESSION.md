@@ -3,11 +3,11 @@
 This supersedes the earlier post-v20 handoff. Read `PROJECT_CONTEXT.md` for the
 big picture; this captures the current frontier.
 
-## 🧭 M2 DECISION-CORE (N22, 2026-05-29) — built + learnability boundary PINNED
+## ✅ M2 DECISION-CORE (N22, 2026-05-29) — built + VALIDATED as PPO-learnable
 
 Executed the advisor/workflow-recommended **Option B pivot** (make the POLICY decide,
-not the skill), sim-only, staged to de-risk. **The decision-core architecture works;
-the learnability boundary is now empirically precise.**
+not the skill), sim-only, staged to de-risk. **The policy genuinely LEARNED to
+explore + select + sequence — greedy clears the blind-explore arena 64/64.**
 
 **Built + committed (`e3b8dbb`, `579af7d`):**
 - **Decision-core**: `target_class` reinterpreted as an instance pointer (slot into
@@ -25,26 +25,36 @@ the learnability boundary is now empirically precise.**
 - Tools: `scripts/n21_decision_core_gonogo.py` (scripted demonstrator),
   `scripts/decision_core_rollout.py` (eval).
 
-**FINDINGS:**
-- **Scripted go/no-go PASSES** both arenas: a hand-coded point-then-explore policy
-  clears 64/64 (clusters = 16 MINE + 1 blind NAVIGATE). The task is SOLVABLE.
-- **PPO (decision_core + clusters + PBRS, 200 iters) — the discriminator — result:**
-  the policy learned instance-selection/migration (clears cluster A = 32/64; ~56–60
-  on the all-visible trees arena) but **NAVIGATE=0 everywhere** — it never learned to
-  deliberately navigate, so it stalls once no trunk is in perception (blind-explore to
-  B, AND straggler-recovery on trees). Pure MINE-migration, same greedy collapse as the
-  v5/v6/v7 nav retrains.
-- **CONCLUSION (4× confirmed): deliberate NAVIGATE is NOT learnable by PPO+PBRS here.
-  The fix is BEHAVIOR CLONING** from the scripted demonstrator (which navigates +
-  clears 64/64) — feasible on this state-vector obs (no pixels), exactly as the
-  architecture analysis predicted. Reward-hacking is a dead end (don't repeat it).
+**✅ RESULT — M2 decision-core VALIDATED as PPO-learnable (NO behavior-cloning needed).**
+A greedy policy clears the 2-cluster **blind-explore** arena **64/64 on seeds 1/2/3**
+(commit `6053556`): MINE cluster A → ONE blind NAVIGATE hop → MINE cluster B. The
+policy genuinely learned **explore-when-blind + instance-selection + sequencing.**
 
-**NEXT STEP (precise, de-risked):** BC warm-start the policy from
-`n21_decision_core_gonogo.py`'s point-then-explore demonstrations (generate
-(obs, action) rollouts → supervised NLL on the RLModule's action dist → optional PPO
-fine-tune), then re-eval `decision_core_rollout.py` (expect NAVIGATE>0 + 64/64 on
-clusters). Spec/plan: `docs/superpowers/{specs,plans}/2026-05-29-gatherer-survival-forest-fidelity*`
-(the decision-core extends the same Option B path).
+The earlier "needs BC, 4× confirmed" framing was WRONG — a greedy-eval artifact, not
+a learning failure (the advisor caught it from training `ep_len≈90 < cap 300` =
+episodes dying by OOB, which requires NAVIGATE). Three real bugs, all fixed:
+1. **OOB-truncation punished exploration** (wander out → episode dies → policy learns
+   NAVIGATE is fatal → greedy MINE-spam). Fix: CLAMP the agent at the arena wall.
+2. **PBRS drip** (Φ=−W·dist ≤0 with γ<1 paid ~+0.02/step to stand still). Fix:
+   distance-reduction form (zero inaction drip).
+3. **Greedy decode ignored the action mask** so it picked masked HARVEST instead of
+   NAVIGATE. Fix: `_greedy_decode` applies the skill mask; in decision_core the
+   HARVEST mask is **perception-based** (valid if a trunk is VISIBLE, since MINE
+   walks to it). → greedy MINEs visible trunks, NAVIGATEs only when blind.
+
+Scripted go/no-go also PASSES both arenas; sampled eval 64/64. (Trees=60/64 is OOD —
+the policy was trained on clusters, not the trees layout.)
+
+**NEXT STEPS:**
+1. **Mirror the decision-core to real MC** (Phase D, not yet done): Java HarvestSkill
+   demoted to mine the pointed instance (`target_class` = the k-th nearest column,
+   matching GathererOverlayBuilder's order) + the perception-based HARVEST mask; deploy
+   + transfer the learned policy. Watchable: the agent will tree-by-tree decide.
+2. **Generalize the training layout** (clusters + trees + randomized scatter) so the
+   policy isn't cluster-OOD (closes the trees 60/64 gap).
+3. Then bigger/obstacled worlds (Option B M3) + multi-role reuse.
+Spec/plan: `docs/superpowers/{specs,plans}/2026-05-29-gatherer-survival-forest-fidelity*`
+(decision-core extends the same Option B path).
 
 ---
 
