@@ -112,6 +112,19 @@ def m1_gatherer_config(
             "stage": 1,
             "active_roles": ["gatherer"],
             "max_episode_ticks": max_episode_ticks,
+            # Vary the arena layout per training episode so the policy learns a
+            # general navigate-and-repeat strategy (not a single-layout overfit);
+            # eval/transfer pass fixed seeds and never set this.
+            "randomize_layout": True,
+            # PBRS distance shaping so NAVIGATE's (delayed) value is learnable;
+            # policy-invariant, training-only. Closes gap #2's local optimum
+            # where the policy HARVEST-spammed and never repositioned.
+            "distance_shaping": True,
+            # Penalty for a failed skill dispatch. Once the agent clears every
+            # log within MAX_SEARCH_RADIUS, further HARVESTs fail (tail >16 b
+            # away); this makes that no-op spam costly so the policy learns to
+            # NAVIGATE to the far tail (proven in-sim to clear 64/64). v6.
+            "failure_penalty": 0.5,
         }
     else:
         register_aiutopia_env()
