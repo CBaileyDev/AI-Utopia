@@ -153,6 +153,14 @@ class AiUtopiaSimEnv(ParallelEnv):
         # log) becomes the better action. Not potential-based (it intentionally
         # shifts the optimum away from no-op spam); eval leaves it at 0.
         self._failure_penalty = float(config.get("failure_penalty", 0.0))
+        # Training-only terminal bonus on goal success (collected all 64). The
+        # tail logs are worth only ~+2 (oak_log=+1, no completion bonus in the
+        # base reward), too small to flip HARVEST's argmax toward the NAVIGATE-
+        # then-HARVEST needed to clear the >16 b tail (v5/v6 stayed HARVEST-only).
+        # A large success bonus makes navigate-to-completion strongly dominant
+        # over both stall-spam and arena-escape. Eval leaves it at 0 (the gate
+        # only checks oak_log>=64), so it never inflates the reported metric.
+        self._completion_bonus = float(config.get("completion_bonus", 0.0))
 
     # ───── PettingZoo API ─────
     def observation_space(self, agent: str) -> DictSpace:
@@ -230,6 +238,10 @@ class AiUtopiaSimEnv(ParallelEnv):
             curr_inv = _inventory_from_obs(obs_curr)
             goal_success = _goal_success(self._stub_subgoal.goal_specification, curr_inv)
             term[agent] = goal_success
+            # Training-only terminal bonus (see __init__); makes clearing the
+            # full field strongly dominant over stall-spam / arena-escape.
+            if goal_success and self._completion_bonus:
+                rew[agent] += self._completion_bonus
 
             # 6. TRUNCATION — tick budget OR out of the seeded arena box (N19).
             pos = obs_curr.get("position", None)

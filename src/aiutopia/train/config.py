@@ -120,11 +120,17 @@ def m1_gatherer_config(
             # policy-invariant, training-only. Closes gap #2's local optimum
             # where the policy HARVEST-spammed and never repositioned.
             "distance_shaping": True,
-            # Penalty for a failed skill dispatch. Once the agent clears every
-            # log within MAX_SEARCH_RADIUS, further HARVESTs fail (tail >16 b
-            # away); this makes that no-op spam costly so the policy learns to
-            # NAVIGATE to the far tail (proven in-sim to clear 64/64). v6.
-            "failure_penalty": 0.5,
+            # Penalty for a failed skill dispatch (no-op HARVEST spam at a stall).
+            # v6 used 0.5 which, given oak_log=+1 and ~300-tick episodes, risked
+            # an arena-ESCAPE optimum (~-150/ep made walking off the edge cheaper
+            # than collecting). v6 didn't escape but stayed HARVEST-only. v7 cuts
+            # it to a mild 0.05 (de-risk escape) and leans on completion_bonus.
+            "failure_penalty": 0.05,
+            # v7: terminal bonus on collecting all 64. The tail is worth only ~+2
+            # in the base reward — too small to flip HARVEST's argmax toward the
+            # NAVIGATE-then-HARVEST that clears the >16 b tail. +10 makes
+            # navigate-to-completion strongly dominant. Training-only (eval=0).
+            "completion_bonus": 10.0,
         }
     else:
         register_aiutopia_env()
@@ -173,7 +179,12 @@ def m1_gatherer_config(
             lambda_=0.95,
             clip_param=0.2,
             vf_clip_param=10.0,
-            entropy_coeff=0.01,
+            # v7: 0.01 -> 0.02. v5/v6 collapsed to HARVEST-argmax everywhere and
+            # never sampled NAVIGATE at the stall, so a completion bonus alone
+            # has no trajectory to reinforce. More entropy keeps NAVIGATE alive
+            # long enough to discover the navigate-to-completion path. (Affects
+            # both backends; only sim trains now and real benefits too.)
+            entropy_coeff=0.02,
             kl_coeff=0.2,
             grad_clip=1.0,
             # NO legacy model={"use_lstm": True} block — the custom RLModule
