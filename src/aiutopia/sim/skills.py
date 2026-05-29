@@ -213,6 +213,32 @@ def _apply_harvest(world: SimWorld, action) -> dict:
     return _completion("COMPLETED", "", clipped)
 
 
+def mine_instance(world: SimWorld, target_x: int, target_z: int) -> dict:
+    """Decision-core MINE: harvest ONLY the trunk at world (target_x, target_z) —
+    the instance the policy POINTED at (via the g_nearest_resources pointer) — with
+    NO findNearest scan and NO chaining to other columns. Walk into reach of each
+    alive log in that column bottom-up and break it. This is the demoted HARVEST
+    that forces the POLICY (not the skill) to choose which instance + the sequence.
+    Returns COMPLETED if it broke >=1 log, else IMMEDIATE_FAILURE."""
+    tx, tz = int(round(target_x)), int(round(target_z))
+    col_idx = [
+        i
+        for i in range(world.logs.shape[0])
+        if bool(world.log_alive[i])
+        and int(world.logs[i][0]) == tx
+        and int(world.logs[i][2]) == tz
+    ]
+    if not col_idx:
+        return _completion("IMMEDIATE_FAILURE", f"no alive log at ({tx},{tz})", 0)
+    col_idx.sort(key=lambda i: int(world.logs[i][1]))  # bottom-up
+    for i in col_idx:
+        target_center = world.logs[i].astype(np.float64) + 0.5
+        _walk_into_reach(world, target_center)
+        world.log_alive[i] = False
+        world.inventory["oak_log"] = world.inventory.get("oak_log", 0) + 1
+    return _completion("COMPLETED", "", 0)
+
+
 def _apply_navigate(world: SimWorld, action) -> dict:
     raw, clipped = _clip_spatial(action)
     origin = world.agent_pos.copy()

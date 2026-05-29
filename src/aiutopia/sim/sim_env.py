@@ -53,6 +53,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
+import numpy as np
 from gymnasium.spaces import Dict as DictSpace
 from pettingzoo import ParallelEnv
 
@@ -62,9 +63,9 @@ from aiutopia.env.spaces import (
     build_role_action_space,
     build_role_observation_space,
 )
-from aiutopia.sim.obs_adapter import build_gatherer_obs
+from aiutopia.sim.obs_adapter import build_gatherer_obs, gatherer_nearest_columns
 from aiutopia.sim.reward_adapter import step_reward
-from aiutopia.sim.skills import apply_skill
+from aiutopia.sim.skills import apply_skill, mine_instance
 from aiutopia.sim.world import SimWorld
 
 __all__ = ["AiUtopiaSimEnv"]
@@ -121,6 +122,13 @@ class AiUtopiaSimEnv(ParallelEnv):
         # seeds (1/2/3) for the gate. Set via env_config["randomize_layout"].
         self._randomize_layout = bool(config.get("randomize_layout", False))
         self._train_ep = 0
+        # M2 decision-core: when True, HARVEST is DEMOTED to mine ONLY the
+        # instance the policy points at (target_class reinterpreted as a slot
+        # index into g_nearest_resources) — no findNearest scan, no field-clearing
+        # chaining. This forces the POLICY (not the skill) to choose which trunk +
+        # the sequence, and to NAVIGATE/explore when nothing is in perception.
+        # Off by default (preserves the proven HARVEST-spam M1B/survival path).
+        self._decision_core = bool(config.get("decision_core", False))
 
     # ───── PettingZoo API ─────
     def observation_space(self, agent: str) -> DictSpace:
@@ -147,6 +155,25 @@ class AiUtopiaSimEnv(ParallelEnv):
         infos = {a: {} for a in self.agents}
         return obs, infos
 
+    def _dispatch_decision_core(self, world, action):
+        """Decision-core dispatch: HARVEST -> MINE the policy-POINTED instance
+        only (target_class is the slot index into g_nearest_resources); all other
+        skills (NAVIGATE-explore, wait, ...) use the normal skill dynamics."""
+        skill_type = int(np.asarray(action.get("skill_type", 5)).reshape(-1)[0])
+        if skill_type != 1:  # not HARVEST
+            return apply_skill(world, action)
+        _col_top, nearby = gatherer_nearest_columns(world)
+        if not nearby:  # nothing in perception — the policy must NAVIGATE to explore
+            return world, {
+                "resultCode": "IMMEDIATE_FAILURE",
+                "failureReason": "no resource in perception (NAVIGATE to explore)",
+                "clippedAxesBitset": 0,
+            }
+        k = int(np.asarray(action.get("target_class", 0)).reshape(-1)[0])
+        k = max(0, min(k, len(nearby) - 1))  # clamp the pointer to visible instances
+        x, z = int(nearby[k][0]), int(nearby[k][1])
+        return world, mine_instance(world, x, z)
+
     def step(self, actions: dict[str, dict]):
         new_obs: dict[str, dict] = {}
         rew: dict[str, float] = {}
@@ -158,8 +185,13 @@ class AiUtopiaSimEnv(ParallelEnv):
             world = self.worlds[agent]
             action = actions.get(agent, {})
 
-            # 1. Advance world state via the macro-skill dynamics.
-            world, completion = apply_skill(world, action)
+            # 1. Advance world state. In decision-core mode HARVEST is demoted to
+            # mine ONLY the policy-pointed instance; everything else (NAVIGATE
+            # explore, wait, ...) uses the normal skill dynamics.
+            if self._decision_core:
+                world, completion = self._dispatch_decision_core(world, action)
+            else:
+                world, completion = apply_skill(world, action)
             # 2. env-step counter (one tick per step; walk-ticks NOT counted).
             world.tick += 1
 

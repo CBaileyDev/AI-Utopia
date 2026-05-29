@@ -94,24 +94,27 @@ def _inv_slots(inventory: dict[str, int]) -> tuple[np.ndarray, np.ndarray]:
     return ids, counts
 
 
-def build_gatherer_obs(world) -> dict:
-    """Build the gatherer obs dict from SimWorld state, matching the real obs."""
+def gatherer_nearest_columns(world):
+    """Per-(x,z)-column TOPMOST-log-within-±3 nearest list — the SINGLE source of
+    truth for both g_nearest_resources AND the decision-core instance pointer.
+
+    Returns ``(col_top, nearby)``:
+      - ``col_top``: dict (dx,dz)->topmost log dy in [-3,+3] for every in-grid
+        column (drives g_resource_grid).
+      - ``nearby``: the SCAN_RADIUS subset sorted by (distSq, dx, dz), each entry
+        ``(x, z, dx, dy, dz, dist_sq)`` with absolute world (x,z). g_nearest_resources
+        row k == nearby[k]; the action ``target_class`` (reinterpreted as an instance
+        pointer in decision-core mode) indexes ``nearby`` -> the trunk at world (x,z).
+
+    Mirrors GathererOverlayBuilder: scan each column top-down dy=+3..-3, take the
+    topmost non-air (==topmost log for our bare-trunk arena); logs at dy+4 are above
+    the window and never seen. Iteration order dx outer [-16,16), dz inner, so the
+    stable distSq sort reproduces the equidistant tie-break the golden trace caught.
+    """
     bx = int(math.floor(float(world.agent_pos[0])))
     by = int(math.floor(float(world.agent_pos[1])))
     bz = int(math.floor(float(world.agent_pos[2])))
-
-    # --- spatial (GathererOverlayBuilder parity) ---
-    # The real builder scans each (dx,dz) column TOP-DOWN over dy=+3..-3 and
-    # records the TOPMOST non-air block (ONE per column, then `break`). For our
-    # bare-trunk arena the only blocks are logs, so the topmost block within the
-    # ±3 window is the highest log with dy in [-3,+3]; logs at dy+4 (a 4-tall
-    # trunk's crown, Y=69 from feet Y=65) sit ABOVE the window and are never seen.
-    # We must replicate this per-column-topmost-within-±3 model (NOT per-log), or
-    # the sim diverges from real on stacked trunks (real shows one dy+3 entry per
-    # trunk; a naive per-log scan shows all 4 logs). For the old flat arena this
-    # collapses to the prior behavior (one log/col at dy+1).
-    grid = np.zeros((2 * GRID_RADIUS, 2 * GRID_RADIUS, 6), dtype=np.float32)
-    col_top: dict[tuple[int, int], int] = {}  # (dx,dz) -> topmost log dy in [-3,+3]
+    col_top: dict[tuple[int, int], int] = {}
     for i in range(world.logs.shape[0]):
         if not bool(world.log_alive[i]):
             continue
@@ -119,36 +122,40 @@ def build_gatherer_obs(world) -> dict:
         dx, dy, dz = lx - bx, ly - by, lz - bz
         if not (-GRID_RADIUS <= dx < GRID_RADIUS and -GRID_RADIUS <= dz < GRID_RADIUS):
             continue
-        if not (-3 <= dy <= 3):  # outside the real builder's ±3 vertical scan window
+        if not (-3 <= dy <= 3):
             continue
         cur = col_top.get((dx, dz))
-        if cur is None or dy > cur:  # keep the TOPMOST log in the window
+        if cur is None or dy > cur:
             col_top[(dx, dz)] = dy
-
-    nearby: list[tuple[int, int, int, int]] = []  # (dx, dy, dz, distSq)
-    # Iterate in the real builder's order — dx outer [-16,16), dz inner — so the
-    # stable distSq sort reproduces the equidistant tie-break (the golden trace
-    # caught this on the 8th-nearest tie). Grid marked for every in-grid column
-    # with a topmost log; nearby gated by SCAN_RADIUS (== real lines 64-69).
+    nearby: list[tuple[int, int, int, int, int, int]] = []
     for dx in range(-GRID_RADIUS, GRID_RADIUS):
         for dz in range(-GRID_RADIUS, GRID_RADIUS):
             dy = col_top.get((dx, dz))
             if dy is None:
                 continue
-            grid[dx + GRID_RADIUS][dz + GRID_RADIUS][0] = 1.0  # channel 0 = log
             dist_sq = dx * dx + dy * dy + dz * dz
             if math.sqrt(dist_sq) <= SCAN_RADIUS:
-                nearby.append((dx, dy, dz, dist_sq))
+                nearby.append((bx + dx, bz + dz, dx, dy, dz, dist_sq))
+    nearby.sort(key=lambda r: (r[5], r[2], r[4]))  # (distSq, dx, dz)
+    return col_top, nearby
+
+
+def build_gatherer_obs(world) -> dict:
+    """Build the gatherer obs dict from SimWorld state, matching the real obs."""
+    # --- spatial (GathererOverlayBuilder parity; see gatherer_nearest_columns) ---
+    col_top, nearby = gatherer_nearest_columns(world)
+    grid = np.zeros((2 * GRID_RADIUS, 2 * GRID_RADIUS, 6), dtype=np.float32)
+    for (dx, dz), _dy in col_top.items():
+        grid[dx + GRID_RADIUS][dz + GRID_RADIUS][0] = 1.0  # channel 0 = log
 
     g_resource_grid = grid.reshape(-1)  # FLAT (6144,) x-z-c, matches real
-    nearby.sort(key=lambda r: (r[3], r[0], r[2]))
     g_nearest = np.zeros((8, 6), dtype=np.float32)
     for k in range(min(8, len(nearby))):
-        dx, dy, dz, _ = nearby[k]
+        _x, _z, dx, dy, dz, _ = nearby[k]
         g_nearest[k] = [dx / SCAN_RADIUS, dy / 8.0, dz / SCAN_RADIUS, 0.0, 1.0, 1.0]
 
     g_richness = np.float32(min(1.0, len(nearby) / 64.0))
-    nearest_res_dist = math.sqrt(nearby[0][3]) if nearby else SENTINEL_NO_TARGET
+    nearest_res_dist = math.sqrt(nearby[0][5]) if nearby else SENTINEL_NO_TARGET
     nearest_chest_dist = SENTINEL_NO_TARGET  # no chest in the M1B arena
 
     inv_ids, inv_counts = _inv_slots(world.inventory)
