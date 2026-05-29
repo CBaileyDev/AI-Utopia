@@ -232,6 +232,13 @@ Verified end-to-end via `scripts/n14_reward_probe.py`: 6 oak_log per 6 env_steps
 
 ## 9. The fundamental throughput problem
 
+> **⚠️ Note (N21, 2026-05-29):** everything in §9 below was written *before* the sim
+> existed — it is the accurate diagnosis of the **real-MC** env. The sim now exists and
+> has been measured + profiled. See **§9.1** for the corrected, measured reality: the
+> bottleneck moved off the JVM (it is now RLlib framework + policy overhead on one CPU
+> core, not the sim and not the GPU), and the "1000–50,000×" JAX figure in the table
+> below is largely a unit artifact (realistic ≈ 200–500× over the current sim).
+
 Your hardware is built for parallel compute; Minecraft is built for single-threaded simulation. The mismatch creates the loop:
 
 ```
@@ -254,10 +261,84 @@ Python obs read:  10-50 ms (JSON deserialize)
 | **Multiple agents per instance** via `carpetSpawn` extra players | 1.5-2× (shared server tick) | Medium | None |
 | **Raise tick rate** 60 → 100-120 | 2× | Medium (crash risk; had to drop from 300) | None |
 | **Bigger model** (LSTM 256→1024) | actually uses GPU | Low | None |
-| **Custom Python/JAX sim of M1B task** | 1000-50000× | Medium (~500-1000 lines) | Real — policy may exploit sim quirks |
+| **Custom Python/JAX sim of M1B task** | ~~1000-50000×~~ → **~250× DONE** (scalar NumPy sim built); **~200-500×** more via full JAX rewrite (§9.1) | Medium (~500-1000 lines) | Real — policy may exploit sim quirks |
 | **Hybrid: train in fast sim, fine-tune in real MC** | best of both | High (need sim + fine-tune loop + transfer eval) | Mitigated by fine-tune phase |
 
 The **honest** answer to "are we training with all resources available?" is **no**, and the **honest** answer to "should we simulate it ourselves?" is **yes for M1B**, **maybe for M2+**, **no for deployment**.
+
+### 9.1 Measured reality after the sim was built (N21, 2026-05-29)
+
+The fast sim now exists and has been **measured + adversarially profiled** (workflow +
+the reusable `scripts/sim_step_microbench.py`). Three of §9's projections are wrong in
+instructive ways.
+
+**Measured throughput.** The sim does **~222 macro-steps/s** (verified across several
+`PPO_aiutopia_sim_*` 200-iter runs) vs **0.73–0.9 macro-steps/s** for real MC (aggregate
+over the 4 JVM instances; the docs' "0.9" is rounded slightly optimistic — best measured
+real run is 0.726). That is **~250× raw** (≈306× vs the measured real rate) — the sim
+converges in **~90 s** vs ~6–8 h of real-MC for the same step budget. A "macro-step" =
+one skill dispatch on both sides (verified: `sim_env.py` step() and `wrapper.py` step()
+each issue exactly one dispatch), so the ratio is apples-to-apples. Caveat: real HARVEST
+*chains* (clears many logs per dispatch) while the scalar sim does one, so real does more
+work per macro-step — 250× in dispatches/s modestly overstates true task-progress speedup.
+The old **"~50 days → ~48,000×"** figure is a **category error**: that estimate was against
+the structurally-broken, unwinnable task (see memory `m1b-blocked-by-broken-task`), not a
+fair baseline.
+
+**The bottleneck moved — it is NOT the sim, and NOT the GPU.** Profile of one ~4.56 ms
+training step (`num_env_runners=0`, single in-process env):
+
+| Component | % of step |
+|---|---|
+| PPO learner update (CPU kernel-launch dispatch; **GPU ~84% idle**, 56 W of 320 W) | 33.7% |
+| LSTM policy inference (tiny model, batch=1) | 32.5% |
+| RLlib connector / sampling pipeline (pure new-API-stack framework) | 27.8% |
+| **The sim env itself** (apply_skill incl. walk chain + obs build + reward) | **5.7%** |
+
+We traded the *JVM single-thread* bottleneck for an *RLlib single-env single-thread* one:
+~94% of every step is framework + policy overhead on **one CPU core of 16**; the RTX 4080
+and the other 15 cores sit idle. **Optimizing the scalar NumPy sim does almost nothing**
+(Amdahl-capped to ~6%). Within the env, the *typical* step is `build_gatherer_obs`-bound
+(the 64-log Python grid loop), not walk-loop-bound; the walk chain only spikes on a rare
+full-field cap=64 harvest.
+
+**The "1000–50,000×" JAX projection is largely a UNIT ARTIFACT.** Craftax's "~280k steps/s
+on a 4090" counts *primitive ticks*; this sim reports *macro-steps*, and one macro-step ≈
+50–509 primitive ticks. In consistent units a full GPU rewrite (env + policy + learner
+batched under one `jit`, thousands of worlds via `vmap`, policy resident on the idle GPU)
+realistically reaches **~40–50k macro-steps/s ≈ 200–500× over the current sim** — not
+1000×+. M1B *does* vectorize cleanly (fixed 64 logs / 6144 grid, no terrain gen) via
+fixed-depth masked `lax.scan` + `jnp.where` skill-select; the single biggest code win is
+replacing the ~445-iteration Python walk-loop with the closed-form
+`ticks = ceil((dist − REACH)/WALK_PER_TICK)`. Fidelity catch: precompute the Java-faithful
+arena layouts on CPU and load them as device constants (JAX PRNG ≠ `java.util.Random`
+would break the golden-trace obs parity).
+
+**Scaling levers, in ROI order (corrected — §9's table over-promised runner count):**
+1. **`num_env_runners` — free, but small.** Currently 0. PPO here is *synchronous*
+   (sample → learner update, no overlap) with a **fixed ~1.29 s/batch learner**, giving a
+   hard **~595 steps/s asymptote reached by N≈2**. So more runners buy **~2.5×, not §9's
+   "4×."** Recommended ~8 (≈80% of the ceiling, fits the 16 physical cores). **Gotcha:**
+   set `torch.set_num_threads(1)` / `OMP_NUM_THREADS=1` per runner or N×16 threads thrash.
+   *(This N-table is model-based — its adversarial verifier failed to return; the ~595/s
+   learner asymptote is the robust part, derived from the measured 1.29 s/batch.)*
+2. **Batching — the real lever on this stack.** Bigger `train_batch`/`minibatch` (GPU 84%
+   idle → bigger updates are nearly free and *raise* the 595/s ceiling) +
+   `num_envs_per_env_runner > 1` (amortize the 1.48 ms LSTM forward across k envs). These
+   *break* the ceiling; runners only approach it.
+3. **Vectorized JAX rewrite (Phase D)** — ~200–500× as above; the big multiplier, but only
+   worth building when there are enough roles/agents to consume the throughput (M2+).
+
+**The true ceiling is PPO sample-efficiency, not steps/s.** Past a useful batch width, more
+throughput stops cutting wall-clock-to-gate (oversized batches hurt per-sample learning);
+for single-agent M1B that saturates well before even the 4080 does. So **stronger hardware
+buys ≈ nothing for M1B** — the GPU is already 84% idle and the learner is launch-bound on a
+tiny model. A bigger GPU (4090/5090/H100) or a high-core cloud VM earns its keep only for
+the Phase-D JAX path (wider world batch) and **M2+ multi-role MARL / parameter sweeps**,
+where the extra width is actually consumed.
+
+**Measured hardware (this box):** AMD Ryzen 9 9950X3D (16c/32t, 3D V-Cache), 61 GB RAM,
+NVIDIA RTX 4080 (16 GB, 320 W).
 
 ## 10. How to operate the system
 
@@ -393,12 +474,21 @@ N7-followup pending  3 brainstorm caveats for M2 plan
 T21  in_progress  Empirical training run to evaluation gate
 ```
 
-## 16. The big open question
+## 16. The big open question — ✅ RESOLVED (N21, 2026-05-29): we built it
+
+**Should we switch to a custom Python/JAX simulator for M1B?** → **Yes, and we did** — a
+scalar-NumPy sim (not yet JAX) behind the same obs/action/reward contracts. Measured **~250×**
+over real MC, converges in ~90 s, transfer-validated. The decision below played out as
+predicted; see **§9.1** for the measured numbers and the corrected JAX outlook. The framing
+below is preserved for the record (one correction inline).
 
 **Should we switch to a custom Python/JAX simulator for M1B?**
 
 Arguments **for**:
-- 1000-50000× throughput (your GPU + threads actually used)
+- ~~1000-50000× throughput~~ → **~250× delivered** by the scalar-NumPy sim; a *further*
+  ~200–500× via a full JAX rewrite (the "1000-50000×" was a macro-step-vs-primitive-tick
+  unit artifact — §9.1). The GPU + threads are **still mostly idle** even in the sim, because
+  the bottleneck is now RLlib framework + policy overhead, not the env.
 - M1B task is simple: agent position, oak_log grid, walk + break
 - ~500-1000 lines of code
 - Same `build_role_observation_space` / `build_role_action_space` contracts; policy drops into real-MC env unchanged
