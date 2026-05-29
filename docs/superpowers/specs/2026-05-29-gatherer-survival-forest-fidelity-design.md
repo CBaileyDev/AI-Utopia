@@ -89,11 +89,15 @@ biggest risk; directly fixes the "instant break" complaint; sidesteps the reach 
   the budget math is explicit and tunable.
 - **Obs:** no change. **Reward:** `oak_log` stays the unit (1.0); no new shaping.
 
-**Validation:** retrain in sim (fast); confirm the sim rollout clears via multi-dispatch
-HARVEST; rebuild + redeploy the Java jar; run `scripts/transfer_eval.py` → expect 3/3
-(now at survival speed, ~28 s/scenario). The spike already shows real-MC determinism.
+**Validation:** break-timing changes neither the obs nor the optimal action (still
+HARVEST-spam) — so, exactly like the `MAX_SEARCH_RADIUS` fix, **the existing
+checkpoint may transfer with NO retrain.** First rebuild + redeploy the timed-break
+jar and run `scripts/transfer_eval.py` against the *current* policy → expect 3/3
+(survival speed, ~28 s/scenario; the spike already proved real-MC determinism). Only
+spend a sim retrain if it fails to transfer. Separately, add the matching break-tick
+cost to the sim so a sim rollout reproduces ~17 logs / 400-tick dispatch.
 
-### Increment 2 — Real trees (capped height, non-decaying leaves)
+### Increment 2 — Real trees (capped height, bare trunks)
 
 **What changes**
 
@@ -105,12 +109,16 @@ HARVEST; rebuild + redeploy the Java jar; run `scripts/transfer_eval.py` → exp
   sim can **never out-reach** the ground-standing fake player (this is the seed-3
   flat-y optimism bug re-dressed; capping height eliminates the variable). Keep total
   oak_log count comparable to today (≈64, so ≈18 trees × 3–4 logs) so the gate target
-  is unchanged. **Leaves:** place **static, non-decaying leaves** (the `persistent=true`
-  leaf state, which never decays) for visual fidelity — leaves are not oak_log so they
-  don't affect harvest; we **never enable random leaf decay** (it would inject
-  non-determinism + item drops into a fidelity-sensitive sim). The sim's `world.py`
-  does not model leaves at all (inert in obs/skill); only the Java arena places them,
-  so sim↔real parity is unaffected.
+  is unchanged. **Leaves: NONE — bare vertical trunks this milestone.** The user's ask
+  ("wood should be placed like trees, not all on the same level") is about the *logs*
+  being vertical/scattered; bare trunks satisfy it. Leaves are **deferred (cosmetic
+  only)** because MC oak leaves are **full collidable blocks**: HarvestSkill walks a
+  straight line via `agent.move(SELF)` under vanilla AABB collision, so canopy leaves
+  could block/deflect the **real-MC** approach while a leafless sim sails straight
+  through — the seed-3 reachability-optimism trap in a new costume. Add leaves only
+  later, AFTER empirically verifying whether leaves at trunk-height ≤4 intersect the
+  agent's walk/head path, and (if they do) modeling that collision in `world.py` +
+  re-running the determinism/stall probe on the tree arena.
 - **`HarvestSkill` + `sim/skills.py`**: `findNearest`'s existing two-pass dy band
   (`dy ∈ [-2,+1]` then full) + chaining already handle a vertical trunk within reach;
   with height ≤ 4 and reach 4.5, **no climbing state machine** is needed. Verify the
@@ -128,7 +136,8 @@ HARVEST; rebuild + redeploy the Java jar; run `scripts/transfer_eval.py` → exp
 - **Tall trees / climbing** (height > reach, bottom-up-chop-and-step-up): height is
   capped ≤ 4 this milestone. Climbing is a follow-on fidelity refinement.
 - **Mobs / hunger / combat:** server stays `difficulty=peaceful`.
-- **Leaf decay, multiple species, terrain/biomes.**
+- **Leaves entirely** (bare trunks this milestone; cosmetic leaves deferred until
+  their collision is verified/modeled), **leaf decay, multiple species, terrain/biomes.**
 
 ## Components touched
 
@@ -146,9 +155,12 @@ HARVEST; rebuild + redeploy the Java jar; run `scripts/transfer_eval.py` → exp
 ## Testing
 
 - **Unit (pytest, sim):** break-tick cost (a cap=64 dispatch under a 400-tick budget
-  collects ~17, not 64; the per-log tick math is exact); tree-arena layout parity
-  (sim `world.py` placement matches `WorldOps` seed-for-seed); `_nearest_alive_log`
-  selects the correct trunk log. Keep the existing sim suite green.
+  collects ~17, not 64; the per-log tick math is exact); tree-arena layout parity —
+  assert per-tree **height AND (x,z) placement seed-for-seed**, matching `WorldOps`'s
+  exact `_JavaRandom` **draw order** (tree height/leaf draws are extra RNG calls; only
+  matching the (x,z) footprint is insufficient — this is the golden-trace tie-break
+  surface that bit before); `_nearest_alive_log` selects the correct trunk log. Keep
+  the existing sim suite green.
 - **Golden-trace fidelity gate:** regenerate `tests/fixtures/` for the tree arena;
   sim obs must match real MC byte-for-byte on the deterministic prefix.
 - **Sim→real transfer gate (per increment):** clear the arena within budget on 3 fixed
