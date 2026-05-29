@@ -57,13 +57,25 @@ that dy limit, so sim seed3 can reach 64 via forced nav while real cannot — a
 separate fidelity gap.
 
 ### DESIGN FORK — needs a human call (do NOT auto-spend on this)
-- **(A) Real-faithful path — RECOMMENDED for M1B.** Revert the bounded-skills
-  change → sim HARVEST chains like real (clears the field in one dispatch).
-  Accept the policy is HARVEST-only (correct — that's what real does). The only
-  remaining 3/3 blocker is seed3's tail → fix the **Java HarvestSkill** (extend
-  vertical reach / add a hop so chaining reaches the `dy=+3` tail).
-  `minecraft-modding-and-server-specialist`. Lowest risk, matches reality,
-  isolates the last blocker to one Java change. Returns to the 2/3 baseline first.
+- **(A) Real-faithful path — CHOSEN, in progress.** Revert the bounded-skills
+  change → sim HARVEST chains like real (clears the field in one dispatch). DONE
+  (`d4d3985`). Accept the policy is HARVEST-only (correct — that's what real does).
+  The 3/3 closer is now PINNED (modding investigation): seed3's residual is a
+  **second 16-block search-radius limit** — `HarvestSkill.MAX_SEARCH_RADIUS = 16`
+  (`HarvestSkill.java:48`), the SKILL's own chaining-scan radius (distinct from the
+  obs `SCAN_RADIUS`). After chaining through the field the agent rests and the
+  remaining tail logs are >16 b away → `findNearest` returns empty → chaining
+  halts. NOT a motor/reach limit: all logs sit at Y=66 = dy=+1 (the earlier
+  "dy=+3" was a stale-arena misread); `REACH=4.5` and the `dy∈[-2,+1]` band are
+  not implicated. **Fix = a symmetric one-liner**: `MAX_SEARCH_RADIUS` 16→48 in
+  BOTH `HarvestSkill.java:48` and `src/aiutopia/sim/skills.py:58` (48 ≈ arena
+  diagonal). Verified in-sim: all 3 seeds → 64/64. No test/golden-trace pins the
+  constant (obs `SCAN_RADIUS`/`GRID_RADIUS=16` stay unchanged). Requires a mod
+  rebuild + redeploy to all 4 instances (Fabric won't hot-reload) + a live cap=64
+  HARVEST probe on seed3 to confirm 64/64 (catches a possible real-only collision
+  residual: straight-line NAVIGATE rams intact logs, but HARVEST's nearest-first
+  chain + the `STALL_TICK_BUDGET=20` watchdog should self-heal). **This Java
+  rebuild+restart is the step to clear with the user before executing.**
 - **(B) Navigation path.** Widen the observation (Java `GathererOverlayBuilder`
   AND `obs_adapter` to ±24 arena) so the policy can see + navigate to distant
   resources; keep bounded skills; re-validate golden trace; re-train. Bigger
