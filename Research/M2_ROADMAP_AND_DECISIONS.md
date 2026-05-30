@@ -1,5 +1,21 @@
 # M2 Roadmap & Decisions — for your return (2026-05-30, autonomous run)
 
+## 🟢 SCOPE DECISION (2026-05-30, user) — PEACEFUL survival world
+
+The project targets a **peaceful** (or near-peaceful) natural survival world. This
+**descopes the entire combat/threat layer**: no hostile mobs, no hunger drain → the
+tick-warp-combat-observability blocker, fight/flee/eat skills, and the Defender role
+are all **dropped or trivial**. The D3 survival-recon "dies step 1" result is moot.
+What REMAINS (the focus): natural terrain + survival mechanics (timed breaking, tools,
+scattered forests), gather/build/farm roles, multi-agent cooperation — and the
+Explorer "find the forest" problem, which is now REAL + testable (the flat toy had no
+exploitable signal; a natural world does → this unblocks D1). **Key first risk:** the
+obs scans topmost-non-air per column → on natural trees that's LEAVES, so logs may be
+invisible (Phase-D scoping §3.2). Recon in progress: can the proven Lumberjack perceive
++ harvest real forest trees on peaceful natural terrain?
+
+
+
 Honest map of where the project stands and the **decisions only you should make**,
 so picking the next milestone is fast. Companion to `Research/MORNING_BRIEF.md`
 (the ablation + scout detail) and `NEXT_SESSION.md` (volatile state).
