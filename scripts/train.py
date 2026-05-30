@@ -11,22 +11,21 @@ os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import ray
 from ray import tune
-from ray.tune import RunConfig
+
 # Use ray.tune.CheckpointConfig — ray.train.CheckpointConfig deprecates
 # checkpoint_frequency/at_end, but Tune's internal trial machinery still
 # expects them as ints, leading to "int % str" crashes mid-iter.
-from ray.tune import CheckpointConfig
+from ray.tune import CheckpointConfig, RunConfig
 
 from aiutopia.common.config import Paths
-from aiutopia.common.logging import setup_logging, get_logger
-from aiutopia.train.callbacks  import (
+from aiutopia.common.logging import get_logger, setup_logging
+from aiutopia.train.callbacks import (
     AiUtopiaMetricsCallback,
     EvalGateStopCallback,
     ExploitHuntCallback,
     M1EvalScenarioCallback,
 )
-from aiutopia.train.config     import m1_gatherer_config
-
+from aiutopia.train.config import m1_gatherer_config
 
 log = get_logger("train")
 
@@ -77,6 +76,10 @@ def main() -> None:
                         help="M2 (sim only): demote HARVEST to pointer-MINE + run the "
                              "2-cluster blind-explore arena + PBRS shaping, so the "
                              "POLICY learns instance-selection + explore-when-blind.")
+    parser.add_argument("--natural-world", action="store_true",
+                        help="(real backend only) Train on natural Minecraft world: "
+                             "peaceful=True (no mobs), arena_bounds_check=False (lift truncation), "
+                             "tick_warp=True (for speed).")
     args = parser.parse_args()
 
     paths = Paths.from_env(); paths.ensure()
@@ -93,6 +96,7 @@ def main() -> None:
         num_env_runners=args.num_env_runners,
         num_envs_per_env_runner=args.num_envs_per_runner,
         decision_core=args.decision_core,
+        natural_world=args.natural_world,
     )
     # Override num_learners for Windows-libuv compat (T7.5 finding).
     if args.num_learners == 0:

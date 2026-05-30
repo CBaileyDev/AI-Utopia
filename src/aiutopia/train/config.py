@@ -95,13 +95,21 @@ def m1_gatherer_config(
     # policy can LEARN to explore-when-blind + select. Off => the proven
     # HARVEST-spam survival-forest path.
     decision_core: bool = False,
+    # Natural-world mode (real backend only): peaceful=True (no hostile mobs),
+    # arena_bounds_check=False (lift truncation box for far forests),
+    # tick_warp=True (keep tick-warp for speed; drowning now survivable via
+    # water_breathing, so no unobservable-death blocker).
+    natural_world: bool = False,
 ) -> PPOConfig:
     """Section 7.1 M1 single-agent gatherer PPO config (new API stack).
 
     ``backend`` selects the env:
-      - "real" (default): live Minecraft via Py4J — unchanged behavior.
-      - "sim": the headless ``AiUtopiaSimEnv`` — registers only the import-light
+      - \"real\" (default): live Minecraft via Py4J — unchanged behavior.
+      - \"sim\": the headless ``AiUtopiaSimEnv`` — registers only the import-light
         sim factory and uses a minimal env_config (no py4j_ports/tick_warp/etc.).
+
+    ``natural_world`` (real backend only): sets peaceful=True (no hostile mobs),
+      arena_bounds_check=False (lift truncation), and tick_warp=True (speed).
     """
     if backend not in ("real", "sim"):
         raise ValueError(f"backend must be 'real' or 'sim', got {backend!r}")
@@ -166,6 +174,14 @@ def m1_gatherer_config(
             "max_episode_ticks": max_episode_ticks,
             "per_worker_seed_offset": True,
             "enable_memory_writes": True,
+            **(
+                {
+                    "peaceful": True,
+                    "arena_bounds_check": False,
+                }
+                if natural_world
+                else {}
+            ),
         }
 
     cfg = (
