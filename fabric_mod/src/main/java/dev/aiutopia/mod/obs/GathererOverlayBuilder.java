@@ -54,21 +54,29 @@ public final class GathererOverlayBuilder {
 
         for (int dx = -GRID_RADIUS; dx < GRID_RADIUS; dx++) {
             for (int dz = -GRID_RADIUS; dz < GRID_RADIUS; dz++) {
-                // Take the topmost non-air block within ±3 y of agent
+                // NATURAL-TERRAIN FIX: scan top-down for the TOPMOST LOG (channel 0)
+                // within ±3 y of agent. Skip air, leaves, and any non-log block —
+                // do NOT break on the first non-air. This makes a log under a leaf
+                // canopy visible (the obs scan now matches HARVEST's log-specific
+                // search). On the bare training arena the topmost block in-band IS
+                // the log, so this is byte-identical to the old topmost-non-air scan
+                // (golden trace / transfer gate unaffected). Mirrors the sim's
+                // gatherer_nearest_columns (topmost log per column within ±3).
                 for (int dy = 3; dy >= -3; dy--) {
                     BlockPos p = origin.add(dx, dy, dz);
                     BlockState s = world.getBlockState(p);
                     if (s.isAir()) continue;
                     String id = Registries.BLOCK.getId(s.getBlock()).toString();
                     Integer channel = matchChannel(id);
-                    if (channel != null) {
-                        grid[dx + GRID_RADIUS][dz + GRID_RADIUS][channel] = 1.0f;
-                        if (Math.sqrt(dx*dx + dy*dy + dz*dz) <= SCAN_RADIUS) {
-                            nearby.add(new NearbyResource(dx, dy, dz, id));
-                            totalCount++;
-                        }
+                    if (channel == null || channel != 0) {
+                        continue;  // not a log (leaf / other block) — keep scanning down
                     }
-                    break;  // only the top hit per (dx, dz)
+                    grid[dx + GRID_RADIUS][dz + GRID_RADIUS][channel] = 1.0f;
+                    if (Math.sqrt(dx*dx + dy*dy + dz*dz) <= SCAN_RADIUS) {
+                        nearby.add(new NearbyResource(dx, dy, dz, id));
+                        totalCount++;
+                    }
+                    break;  // only the topmost LOG per (dx, dz)
                 }
             }
         }
