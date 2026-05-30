@@ -3,11 +3,13 @@
 This supersedes the earlier post-v20 handoff. Read `PROJECT_CONTEXT.md` for the
 big picture; this captures the current frontier.
 
-## 🟢 M2 DECISION-CORE (N22, 2026-05-29) — built + DEMONSTRATED (single seed, trained layout)
+## 🟡 M2 DECISION-CORE (N22, 2026-05-29) — MECHANISM works; policy learning UNVERIFIED
 
 Executed the advisor/workflow-recommended **Option B pivot** (make the POLICY decide,
-not the skill), sim-only, staged to de-risk. **A greedy decision-core policy clears the
-2-cluster blind-explore arena 64/64** — a promising proof-of-concept, NOT yet validated.
+not the skill), sim-only. **The MECHANISM is sound** (pointer-MINE, skill demoted, no
+chaining — keep it). **But the policy's learning contribution is ~zero and the gate
+numbers measure the env scaffolding, not the network** (see discriminator below). The
+"5/5 held-out" / "learned to explore" framing from earlier commits is OVER-CLAIMED.
 
 ⚠️ **Two caveats (advisor) — do NOT over-trust this:**
 1. **The perception-based HARVEST mask is load-bearing**, not the policy alone: when
@@ -37,28 +39,29 @@ not the skill), sim-only, staged to de-risk. **A greedy decision-core policy cle
 - Tools: `scripts/n21_decision_core_gonogo.py` (scripted demonstrator),
   `scripts/decision_core_rollout.py` (eval).
 
-**🟢 RESULT — decision-core greedily clears blind-explore arenas + partially generalizes (NO BC).**
+**🟡 RESULT — mechanism clears blind-explore arenas, but via env oracle (not learned).**
 - v2 (fixed clusters, commit `6053556`): greedy clears 64/64 — MINE cluster A → ONE
   NAVIGATE hop (mask-forced when blind) → MINE cluster B.
 - v4 (RANDOMIZED clusters + blind-only shaping, commit `f355c9c`): clears 64/64 across
   3 randomized geometries; **HELD-OUT (novel high-seed geometries) = 3/5** — the 2/5
   failures were the explore-DIRECTION (blind search, no directional signal → the policy
   learns a direction *prior* that thrashes for uncommon directions).
-- **v5 (directional resource cue, commit `f46af04`): HELD-OUT = 5/5 ✓.** Added a
-  resource-bearing cue (sim-only; reuses the all-zero `g_hostiles_nearby[0]` = unit
-  dir + dist to the nearest alive log, incl. beyond perception) that SIMULATES the
-  future Explorer/Scout role's "wood is that way" report. It makes the decision-core's
-  blind-explore ROBUST across novel geometries — **validating the Explorer→Lumberjack
-  architecture in miniature** (a direction signal → robust explore+select+clear). Zero
-  obs-space/RLModule change. NO behavior-cloning — the earlier "needs BC" was wrong.
-- Caveats: the cue is GROUND-TRUTH (real version needs the actual Explorer role/memory
-  to produce it); trees stays OOD (~60/64 — clusters-only training); single PPO seed.
-- ⛔ **DO NOT train on "mixed" (trees+clusters)** — trees episodes dilute the explore
-  signal (the policy learns "never explore"); mixed REGRESSED to held-out 0/5 even WITH
-  the cue (v6). Train the decision-core explore on **clusters-only**. Trees is a separate
-  easier (no-blind-hop) layout — handle it as its own task if needed, not by mixing.
-- (Mixed trees+clusters training REGRESSED it — trees rarely masks HARVEST so it dilutes
-  the explore signal. Train explore on clusters-only.)
+- v5/v7 (clusters + ground-truth bearing cue): greedy held-out 5/5.
+- ⛔ **DISCRIMINATOR (the honest finding, `scripts/_dc_follower.py`): a SCRIPTED
+  ZERO-LEARNING follower** — `HARVEST target_class=0 when the mask allows; else NAVIGATE
+  toward the g_hostiles_nearby[0] cue` — **also clears 5/5, identical to the trained
+  policy.** So PPO learned ~nothing here: the env does the deciding — the perception-mask
+  picks WHEN (HARVEST if a trunk's visible, else NAVIGATE) and the GROUND-TRUTH bearing
+  cue picks WHICH WAY. The "5/5" measures the oracle scaffolding, not the network.
+- **Honest claim:** decision-core MECHANISM (pointer-MINE, no chaining) works; with a
+  perfect oracle bearing + action mask, a reactive (scriptable) policy clears novel
+  geometries. **NOT "Explorer→Lumberjack validated"** — the Explorer's HARD job is
+  PRODUCING accurate bearings from partial info, which is exactly what's stubbed to
+  ground-truth here. Validated the easy half, assumed the hard half.
+- Caveats: cue is ground-truth oracle; mask is load-bearing; trees OOD (~60/64); single
+  PPO seed; **sim-only — no real-MC transfer (the only real test) attempted.**
+- ⛔ DO NOT train on "mixed" (trees+clusters) — trees dilutes the explore signal; mixed
+  REGRESSED to held-out 0/5 even with the cue (v6). Train explore on clusters-only.
 
 The earlier "needs BC, 4× confirmed" framing was WRONG — a greedy-eval artifact, not
 a learning failure (the advisor caught it from training `ep_len≈90 < cap 300` =
@@ -75,16 +78,22 @@ episodes dying by OOB, which requires NAVIGATE). Three real bugs, all fixed:
 Scripted go/no-go also PASSES both arenas; sampled eval 64/64. (Trees=60/64 is OOD —
 the policy was trained on clusters, not the trees layout.)
 
-**NEXT STEPS:**
-1. **Mirror the decision-core to real MC** (Phase D, not yet done): Java HarvestSkill
-   demoted to mine the pointed instance (`target_class` = the k-th nearest column,
-   matching GathererOverlayBuilder's order) + the perception-based HARVEST mask; deploy
-   + transfer the learned policy. Watchable: the agent will tree-by-tree decide.
-2. **Generalize the training layout** (clusters + trees + randomized scatter) so the
-   policy isn't cluster-OOD (closes the trees 60/64 gap).
-3. Then bigger/obstacled worlds (Option B M3) + multi-role reuse.
-Spec/plan: `docs/superpowers/{specs,plans}/2026-05-29-gatherer-survival-forest-fidelity*`
-(decision-core extends the same Option B path).
+**NEXT STEPS (the REAL open work — sim-variant tuning is exhausted; 7 runs, every "win"
+came from the env doing more):**
+1. **Decide what the policy must actually LEARN.** Right now the env (mask + oracle cue)
+   does the deciding and a scriptable follower matches the net. Two honest paths:
+   (a) accept the decision-core as a thin reactive controller and put the intelligence in
+   the **producers** (the action-mask + a real Explorer/memory that emits bearings from
+   PARTIAL info — the hard half); or (b) remove the oracle (no ground-truth cue, no
+   forced mask) and make the policy genuinely learn search — which earlier needed BC.
+   Pick deliberately; don't keep adding oracle assists that hide the question.
+2. **Real-MC transfer (Phase D) is the only remaining real test of the MECHANISM** —
+   Java HarvestSkill demoted to mine the pointed instance (`target_class` = k-th nearest
+   column, matching GathererOverlayBuilder order) + perception mask; deploy + transfer.
+   Watchable. (Intricate Java; a fresh-session chunk.)
+3. **Real Explorer/Scout role** — produces the bearing cue from partial info (the hard
+   half currently stubbed to ground-truth). Design-gated (brainstorm).
+Spec/plan: `docs/superpowers/{specs,plans}/2026-05-29-gatherer-survival-forest-fidelity*`.
 
 ---
 
