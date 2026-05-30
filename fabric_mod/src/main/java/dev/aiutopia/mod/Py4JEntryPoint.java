@@ -46,6 +46,51 @@ public class Py4JEntryPoint {
         return world.observationsAll();
     }
 
+    /** Role-specific obs read (Phase 2b): Gatherer. Returns JSON string or "{}". */
+    public String observationsGatherer(String playerName) {
+        if (server == null) return "{}";
+        try {
+            var player = server.getPlayerManager().getPlayer(playerName);
+            if (player == null) return "{}";
+            com.google.gson.JsonObject obs = new com.google.gson.JsonObject();
+            new dev.aiutopia.mod.obs.CoreObsBuilder().populate(obs, player, server);
+            new dev.aiutopia.mod.obs.GathererOverlayBuilder().populate(obs, player, server);
+            return obs.toString();
+        } catch (Exception e) {
+            return "{}";
+        }
+    }
+
+    /** Role-specific obs read (Phase 2b): Explorer. Returns JSON string or "{}". */
+    public String observationsExplorer(String playerName) {
+        if (server == null) return "{}";
+        try {
+            var player = server.getPlayerManager().getPlayer(playerName);
+            if (player == null) return "{}";
+            com.google.gson.JsonObject obs = new com.google.gson.JsonObject();
+            new dev.aiutopia.mod.obs.CoreObsBuilder().populate(obs, player, server);
+            new dev.aiutopia.mod.obs.ExplorerOverlayBuilder().populate(obs, player, server);
+            return obs.toString();
+        } catch (Exception e) {
+            return "{}";
+        }
+    }
+
+    /** Role-specific obs read (Phase 2b): Farmer. Returns JSON string or "{}". */
+    public String observationsFarmer(String playerName) {
+        if (server == null) return "{}";
+        try {
+            var player = server.getPlayerManager().getPlayer(playerName);
+            if (player == null) return "{}";
+            com.google.gson.JsonObject obs = new com.google.gson.JsonObject();
+            new dev.aiutopia.mod.obs.CoreObsBuilder().populate(obs, player, server);
+            new dev.aiutopia.mod.obs.FarmerOverlayBuilder().populate(obs, player, server);
+            return obs.toString();
+        } catch (Exception e) {
+            return "{}";
+        }
+    }
+
     public MotorBridge motorBridge() { return motor; }
     public CommBus     commBus()     { return commBus; }
 
