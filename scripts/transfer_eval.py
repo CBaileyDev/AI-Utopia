@@ -58,8 +58,19 @@ def _is_decision_core(run_dir: Path) -> bool:
 
 
 _override = os.environ.get("TRANSFER_CKPT")
+# The PROVEN M1B checkpoint (sim-control 64/64), identified by
+# scripts/find_proven_checkpoint.py. PINNED because heuristics ("newest",
+# "newest non-decision-core") keep selecting collapsed reward-tuning runs that
+# fail the sim control (e.g. 98045 = sim 0/64). Only 2f908/checkpoint_000003
+# clears the sim. TRANSFER_CKPT overrides; if the pin is missing, fall back.
+_PROVEN = (
+    _REPO / "runs" / "aiutopia_M1_seed1"
+    / "PPO_aiutopia_sim_2f908_00000_0_2026-05-29_12-41-05" / "checkpoint_000003"
+)
 if _override:
     _chosen = Path(_override)
+elif _PROVEN.exists():
+    _chosen = _PROVEN
 else:
     _SIM_CKPTS = sorted(
         (
