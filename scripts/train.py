@@ -25,7 +25,7 @@ from aiutopia.train.callbacks import (
     ExploitHuntCallback,
     M1EvalScenarioCallback,
 )
-from aiutopia.train.config import m1_gatherer_config
+from aiutopia.train.config import m1_gatherer_config, multi_agent_config
 
 log = get_logger("train")
 
@@ -69,6 +69,12 @@ def main() -> None:
     parser.add_argument("--num-learners", type=int, default=0,
                         help="Ray Learner processes. 0 runs Learner in driver "
                              "(required on Windows where PyTorch lacks libuv).")
+    parser.add_argument("--roles", default="gather", type=str,
+                        help="Comma-separated role list: 'gather' (default, M1B), "
+                             "'gather,explore' (Explorer M2a), "
+                             "'gather,explore,farm' (full M2). "
+                             "Backward compat: 'gather' → m1_gatherer_config, "
+                             "multi-role → multi_agent_config.")
     parser.add_argument("--backend", default="real", choices=["real", "sim"],
                         help="env backend: 'real' (live Minecraft via Py4J) or "
                              "'sim' (headless fast-sim AiUtopiaSimEnv).")
@@ -90,14 +96,32 @@ def main() -> None:
              object_store_memory=8 * 1024**3,
              _system_config={"object_spilling_threshold": 0.95})
 
-    cfg = m1_gatherer_config(
-        backend=args.backend,
-        seed=args.seed,
-        num_env_runners=args.num_env_runners,
-        num_envs_per_env_runner=args.num_envs_per_runner,
-        decision_core=args.decision_core,
-        natural_world=args.natural_world,
-    )
+    # Parse roles: "gather" → ["gatherer"], "gather,explore,farm" → ["gatherer", "explorer", "farmer"]
+    role_abbrevs = [r.strip() for r in args.roles.split(",")]
+    role_map = {"gather": "gatherer", "explore": "explorer", "farm": "farmer"}
+    roles = [role_map.get(abbrev, abbrev) for abbrev in role_abbrevs]
+
+    # Dispatch to appropriate config factory
+    if roles == ["gatherer"]:
+        # M1B backward compat: use single-role config
+        cfg = m1_gatherer_config(
+            backend=args.backend,
+            seed=args.seed,
+            num_env_runners=args.num_env_runners,
+            num_envs_per_env_runner=args.num_envs_per_runner,
+            decision_core=args.decision_core,
+            natural_world=args.natural_world,
+        )
+    else:
+        # M2 multi-role MAPPO
+        cfg = multi_agent_config(
+            roles=roles,
+            backend=args.backend,
+            seed=args.seed,
+            num_env_runners=args.num_env_runners,
+            num_envs_per_env_runner=args.num_envs_per_runner,
+            natural_world=args.natural_world,
+        )
     # Override num_learners for Windows-libuv compat (T7.5 finding).
     if args.num_learners == 0:
         cfg = cfg.learners(num_learners=0, num_gpus_per_learner=1.0)

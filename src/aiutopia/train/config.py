@@ -43,6 +43,172 @@ def _policy_mapping_fn(agent_id, episode=None, **kwargs):
     return "gatherer_policy"
 
 
+def multi_agent_config(
+    *,
+    # Roles to train: e.g., ["gatherer", "explorer", "farmer"]
+    roles: list[str] = None,
+    backend: str = "sim",
+    py4j_ports: tuple[int, ...] | None = None,
+    num_env_runners: int = 4,
+    num_envs_per_env_runner: int = 2,
+    max_episode_ticks: int = 300,
+    seed: int = 1,
+    rollout_fragment_length: int | str = 32,
+    sample_timeout_s: float = 1800.0,
+    train_batch_size: int = 768,
+    natural_world: bool = False,
+) -> PPOConfig:
+    """Section 7.1 M2 multi-role MAPPO config (new API stack, CTDE critic).
+
+    ``roles`` specifies which agents to train (e.g., ["gatherer", "explorer", "farmer"]).
+    Per-role KL tuning: Explorer 0.2–0.5, Lumberjack 0.5–1.0, Farmer 1.0–2.0.
+    """
+    if roles is None:
+        roles = ["gatherer"]
+
+    if backend not in ("real", "sim"):
+        raise ValueError(f"backend must be 'real' or 'sim', got {backend!r}")
+
+    if backend == "sim":
+        register_aiutopia_sim_env()
+        env_name = SIM_ENV_NAME
+        env_config = {
+            "stage": 1,
+            "active_roles": roles,
+            "max_episode_ticks": max_episode_ticks,
+            "randomize_layout": True,
+        }
+    else:
+        register_aiutopia_env()
+        env_name = ENV_NAME
+        if py4j_ports is None:
+            py4j_ports = tuple(25001 + i for i in range(num_env_runners))
+        env_config = {
+            "stage": 1,
+            "active_roles": roles,
+            "seed_strategy": "fixed_easy",
+            "py4j_ports": list(py4j_ports),
+            "tick_warp": True,
+            "max_episode_ticks": max_episode_ticks,
+            "per_worker_seed_offset": True,
+            "enable_memory_writes": True,
+            **({
+                "peaceful": True,
+                "arena_bounds_check": False,
+            } if natural_world else {}),
+        }
+
+    # Policy mapping: agent_id contains the role name
+    def _policy_mapping_fn_multi(agent_id, episode=None, **kwargs):
+        # agent_id format: "role_0", "role_1", etc.
+        if "_" in agent_id:
+            role = agent_id.rsplit("_", 1)[0]
+        else:
+            role = agent_id
+        return f"{role}_policy"
+
+    # Build per-role RLModule specs
+    rl_module_specs = {}
+    policies_to_train = []
+    for role in roles:
+        policy_name = f"{role}_policy"
+        policies_to_train.append(policy_name)
+
+        # Role-specific KL tuning (per M2 spec)
+        if role == "explorer":
+            kl_coeff = 0.35  # Explorer: 0.2–0.5, midpoint
+        elif role == "farmer":
+            kl_coeff = 1.5  # Farmer: 1.0–2.0, midpoint (delayed reward = higher KL tolerance)
+        else:  # gatherer
+            kl_coeff = 0.5  # Gatherer: 0.5–1.0, midpoint
+
+        rl_module_specs[policy_name] = RLModuleSpec(
+            module_class=_get_role_rl_module_class(role),
+            observation_space=build_role_observation_space(role, stage=1),
+            action_space=build_role_action_space(role),
+            model_config={
+                "role": role,
+                "max_seq_len": 32,
+                "actor_hidden": [256],
+                "mask_comm": False,  # M2: MARL, so live comm (no masking)
+                "core_encoder": {"core_hidden": [512, 256]},
+                "shared_backbone": {"lstm_hidden": 256},
+                "ctde_critic": {"critic_hidden": 256},
+            },
+        )
+
+    cfg = (
+        PPOConfig()
+        .api_stack(
+            enable_rl_module_and_learner=True,
+            enable_env_runner_and_connector_v2=True,
+        )
+        .framework("torch")
+        .environment(
+            env=env_name,
+            env_config=env_config,
+        )
+        .env_runners(
+            num_env_runners=num_env_runners,
+            num_envs_per_env_runner=num_envs_per_env_runner,
+            rollout_fragment_length=rollout_fragment_length,
+            sample_timeout_s=sample_timeout_s,
+        )
+        .learners(
+            num_learners=1,
+            num_gpus_per_learner=0.5,
+        )
+        .training(
+            train_batch_size=train_batch_size,
+            minibatch_size=min(256, train_batch_size // 8),
+            num_epochs=5,
+            gamma=0.99,
+            lr=3.0e-4,
+            lambda_=0.95,
+            clip_param=0.2,
+            vf_clip_param=10.0,
+            entropy_coeff=0.01,
+            kl_coeff=0.5,  # Base KL (overridden per-role in RLModule if needed)
+            grad_clip=1.0,
+        )
+        .rl_module(
+            rl_module_spec=MultiRLModuleSpec(
+                rl_module_specs=rl_module_specs,
+            )
+        )
+        .multi_agent(
+            policies=set(rl_module_specs.keys()),
+            policy_mapping_fn=_policy_mapping_fn_multi,
+            policies_to_train=policies_to_train,
+        )
+        .resources(num_cpus_for_main_process=2)
+        .reporting(
+            metrics_num_episodes_for_smoothing=20,
+            keep_per_episode_custom_metrics=True,
+        )
+        .checkpointing(
+            export_native_model_files=True,
+            checkpoint_trainable_policies_only=True,
+        )
+        .debugging(seed=seed)
+    )
+    return cfg
+
+
+def _get_role_rl_module_class(role: str):
+    """Return the RLModule class for the given role."""
+    if role == "gatherer":
+        return AiUtopiaRoleRLModule
+    elif role == "explorer":
+        from aiutopia.rl_module.explorer_rl_module import ExplorerRoleRLModule
+        return ExplorerRoleRLModule
+    elif role == "farmer":
+        from aiutopia.rl_module.farmer_rl_module import FarmerRoleRLModule
+        return FarmerRoleRLModule
+    else:
+        raise ValueError(f"unknown role: {role!r}")
+
+
 def m1_gatherer_config(
     *,
     # "real" -> live Minecraft via FabricBridge/Py4J (default; unchanged).

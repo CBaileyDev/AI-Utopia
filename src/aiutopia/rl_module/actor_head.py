@@ -42,6 +42,8 @@ LOG_STD_FOR_ZERO_ENTROPY: float = -0.5 * (1.0 + math.log(2.0 * math.pi))  # ≈ 
 # entropy(softmax([20,-20])) ≈ 8e-17, gradient 0 (the logits are a constant).
 _SHOULD_BROADCAST_LOGIT_MAGNITUDE: float = 20.0
 
+# M2 extension: Farmer has 7 skills (PLOW, PLANT, HARVEST, NAVIGATE, WAIT, etc.)
+N_FARMER_SKILLS = 7
 
 # Per-action-key (kind, dim). Keys are listed alphabetically so the
 # concatenated logits line up with tree.flatten(dict) ordering.
@@ -54,6 +56,22 @@ _GATHERER_HEAD_SLICES: dict[str, tuple[str, int]] = {
     "scalar_param": ("gaussian", 1),  # 2 * 1   =   2
     "should_broadcast": ("categorical", 2),  #             2
     "skill_type": ("categorical", N_GATHERER_SKILLS),  #             6
+    "spatial_param": ("gaussian", 3),  # 2 * 3   =   6
+    "target_class": ("categorical", N_TARGET_CLASSES_PER_ROLE),  #          64
+}
+
+# M2 Explorer: discrete 8-way bearing, reinterpreted from target_class
+_EXPLORER_HEAD_SLICES: dict[str, tuple[str, int]] = {
+    "target_class": ("categorical", 8),  # 8-way bearing (N/NE/E/SE/S/SW/W/NW)
+}
+
+# M2 Farmer: 7 skills + spatial/scalar + communication (same structure as Gatherer)
+_FARMER_HEAD_SLICES: dict[str, tuple[str, int]] = {
+    "comm_payload": ("gaussian", COMM_PAYLOAD_DIM),  # 2 * 128 = 256
+    "comm_target_mask": ("multi_binary", 4),  # 2 * 4   =   8
+    "scalar_param": ("gaussian", 1),  # 2 * 1   =   2
+    "should_broadcast": ("categorical", 2),  #             2
+    "skill_type": ("categorical", N_FARMER_SKILLS),  #             7
     "spatial_param": ("gaussian", 3),  # 2 * 3   =   6
     "target_class": ("categorical", N_TARGET_CLASSES_PER_ROLE),  #          64
 }
@@ -161,6 +179,57 @@ def gatherer_action_dist_config() -> tuple[dict, dict]:
     return child_struct, input_lens
 
 
+def explorer_action_dist_config() -> tuple[dict, dict]:
+    """Return (child_distribution_cls_struct, input_lens) for Explorer (8-way bearing).
+
+    Explorer outputs a single Discrete(8) for compass bearing.
+    """
+    from ray.rllib.core.distribution.torch.torch_distribution import (
+        TorchCategorical,
+    )
+
+    child_struct: dict = {}
+    input_lens: dict = {}
+    for key, (kind, dim) in _EXPLORER_HEAD_SLICES.items():
+        size = _output_size_for(kind, dim)
+        input_lens[key] = size
+        if kind == "categorical":
+            child_struct[key] = TorchCategorical
+        else:
+            raise ValueError(f"unknown slice kind {kind!r} for {key!r}")
+    return child_struct, input_lens
+
+
+def farmer_action_dist_config() -> tuple[dict, dict]:
+    """Return (child_distribution_cls_struct, input_lens) for Farmer (7 skills).
+
+    Farmer action space is similar to Gatherer (skill_type, spatial/scalar params, comm)
+    but with 7 skills (PLOW, PLANT, HARVEST, etc.) instead of 6.
+    """
+    from ray.rllib.core.distribution.torch.torch_distribution import (
+        TorchCategorical,
+        TorchDiagGaussian,
+        TorchMultiCategorical,
+    )
+
+    child_struct: dict = {}
+    input_lens: dict = {}
+    for key, (kind, dim) in _FARMER_HEAD_SLICES.items():
+        size = _output_size_for(kind, dim)
+        input_lens[key] = size
+        if kind == "categorical":
+            child_struct[key] = TorchCategorical
+        elif kind == "gaussian":
+            child_struct[key] = TorchDiagGaussian
+        elif kind == "multi_binary":
+            child_struct[key] = TorchMultiCategorical.get_partial_dist_cls(
+                input_lens=[2] * dim,
+            )
+        else:
+            raise ValueError(f"unknown slice kind {kind!r} for {key!r}")
+    return child_struct, input_lens
+
+
 class GathererActorHead(nn.Module):
     INPUT_DIM = 256 + GOAL_EMBED_DIM
     OUTPUT_DIM = sum(_output_size_for(kind, dim) for kind, dim in _GATHERER_HEAD_SLICES.values())
@@ -203,7 +272,55 @@ class GathererActorHead(nn.Module):
         return logits
 
 
+class ExplorerActorHead(nn.Module):
+    """Explorer actor head: 8 logits for discrete bearing (N/NE/E/SE/S/SW/W/NW)."""
+    INPUT_DIM = 256 + GOAL_EMBED_DIM
+    OUTPUT_DIM = 8
+
+    def __init__(self, config: dict[str, Any]):
+        super().__init__()
+        actor_hidden = config.get("actor_hidden", [256])
+        layers: list[nn.Module] = []
+        prev = self.INPUT_DIM
+        for h in actor_hidden:
+            layers += [nn.Linear(prev, h), nn.ReLU()]
+            prev = h
+        layers.append(nn.Linear(prev, self.OUTPUT_DIM))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, hidden, goal_embedding):
+        x = torch.cat([hidden, goal_embedding], dim=-1)
+        logits = self.net(x)
+        return logits
+
+
+class FarmerActorHead(nn.Module):
+    """Farmer actor head: 7 skills + spatial/scalar params + communication."""
+    INPUT_DIM = 256 + GOAL_EMBED_DIM
+    OUTPUT_DIM = sum(_output_size_for(kind, dim) for kind, dim in _FARMER_HEAD_SLICES.values())
+
+    def __init__(self, config: dict[str, Any]):
+        super().__init__()
+        actor_hidden = config.get("actor_hidden", [256])
+        layers: list[nn.Module] = []
+        prev = self.INPUT_DIM
+        for h in actor_hidden:
+            layers += [nn.Linear(prev, h), nn.ReLU()]
+            prev = h
+        layers.append(nn.Linear(prev, self.OUTPUT_DIM))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, hidden, goal_embedding):
+        x = torch.cat([hidden, goal_embedding], dim=-1)
+        logits = self.net(x)
+        return logits
+
+
 def build_actor_head(role: str, config: dict[str, Any]) -> nn.Module:
     if role == "gatherer":
         return GathererActorHead(config)
-    raise NotImplementedError(f"actor head for {role!r} not built (M2+)")
+    elif role == "explorer":
+        return ExplorerActorHead(config)
+    elif role == "farmer":
+        return FarmerActorHead(config)
+    raise NotImplementedError(f"actor head for {role!r} not built")

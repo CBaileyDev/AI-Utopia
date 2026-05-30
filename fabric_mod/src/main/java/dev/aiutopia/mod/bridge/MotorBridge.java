@@ -148,7 +148,9 @@ public class MotorBridge {
     }
 
     /** GATHERER skill_type indices match Python's spaces.py:
-     *  0 NAVIGATE  1 HARVEST  2 DEPOSIT_CHEST  3 SEARCH  4 WAIT  5 NOOP_BROADCAST */
+     *  0 NAVIGATE  1 HARVEST  2 DEPOSIT_CHEST  3 SEARCH  4 WAIT  5 NOOP_BROADCAST
+     *  FARMER skill_type indices:
+     *  6 PLOW  7 PLANT  8 HARVEST_CROP */
     private SkillExecutor newExecutorForSkillType(int skillType) {
         return switch (skillType) {
             case 0 -> new NavigateSkill();
@@ -157,6 +159,9 @@ public class MotorBridge {
             case 3 -> new SearchSkill();
             case 4 -> new WaitSkill();
             case 5 -> new WaitSkill();   // NOOP_BROADCAST = WaitSkill(0); comm payload is handled by CommBus
+            case 6 -> new PlowSkill();
+            case 7 -> new PlantSkill();
+            case 8 -> new HarvestCropSkill();
             default -> null;
         };
     }

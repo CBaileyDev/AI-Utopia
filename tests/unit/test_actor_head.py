@@ -28,9 +28,14 @@ def test_actor_head_forward_shape() -> None:
     assert out.shape == (batch, 344)
 
 
-def test_build_actor_head_gatherer_only_in_m1() -> None:
+def test_build_actor_head_m1_only_gatherer_m2_has_explorer_farmer() -> None:
+    """M1B: gatherer only. M2: explorer + farmer. Builder/defender deferred."""
+    from aiutopia.rl_module.actor_head import ExplorerActorHead, FarmerActorHead
+
     assert isinstance(build_actor_head("gatherer", {}), GathererActorHead)
-    for r in ("builder", "farmer", "defender"):
+    assert isinstance(build_actor_head("explorer", {}), ExplorerActorHead)
+    assert isinstance(build_actor_head("farmer", {}), FarmerActorHead)
+    for r in ("builder", "defender"):
         with pytest.raises(NotImplementedError):
             build_actor_head(r, {})
 

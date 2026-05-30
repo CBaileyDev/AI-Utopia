@@ -21,8 +21,13 @@ def test_gatherer_encoder_outputs_128_d() -> None:
     assert feat.shape == (2, 128)
 
 
-def test_build_role_encoder_gatherer_only_in_m1() -> None:
+def test_build_role_encoder_m1_only_gatherer_m2_has_explorer_farmer() -> None:
+    """M1B: gatherer only. M2: explorer + farmer. Builder/defender deferred."""
+    from aiutopia.rl_module.role_encoder import ExplorerRoleEncoder, FarmerRoleEncoder
+
     assert isinstance(build_role_encoder("gatherer", {}), GathererRoleEncoder)
-    for r in ("builder", "farmer", "defender"):
+    assert isinstance(build_role_encoder("explorer", {}), ExplorerRoleEncoder)
+    assert isinstance(build_role_encoder("farmer", {}), FarmerRoleEncoder)
+    for r in ("builder", "defender"):
         with pytest.raises(NotImplementedError):
             build_role_encoder(r, {})

@@ -31,7 +31,7 @@ PRODUCTION_DIR="$REPO_ROOT/server-runtime"
 TRAINING_DIR="$REPO_ROOT/server-runtime/training"
 # P0: deploy the Phase-0 jar (64-reachable-log arena + reward/term fixes), NOT
 # the old m1b jar the script originally hardcoded.
-MOD_JAR="$REPO_ROOT/fabric_mod/build/libs/aiutopia-mod-0.0.0-m1c-p0.jar"
+MOD_JAR="$REPO_ROOT/fabric_mod/build/libs/aiutopia-mod-0.0.0-m2-farmer.jar"
 MOD_JAR_NAME="$(basename "$MOD_JAR")"
 
 if [[ ! -f "$MOD_JAR" ]]; then

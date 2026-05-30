@@ -1,0 +1,355 @@
+Composer 2.5 (Cursor)
+I read `M1A_PIPELINE_PLAN.md` end-to-end and cross-checked it against your approved spec, M0 code (`wrapper.py`, `bridge.py`, `spaces.py`, `action_mask.py`), and the live Java stubs. Overall this is a **solid, well-scoped Plan A**: motor + obs + reward + manual verification before PPO is the right split. The task structure, TDD steps, and deferrals to Plan B mostly match what you locked in the design review.
+
+Below are the issues I would fix **before** executing the plan, grouped by severity. None of this requires editing files right now — it is review-only as you asked.
+
+---
+
+## Verdict
+
+**Proceed after addressing ~5 must-fix gaps.** The plan is structurally ready (21 implementation tasks + verify/tag), but several wiring bugs would make “M1A verified” misleading: the env would still not talk to the same agent the Carpet player represents, obs would not match Gym spaces, and episodic memory would not actually run in `env.step()` despite the stated goal.
+
+---
+
+## Must-fix (would break smoke or Plan B)
+
+### 1. PettingZoo agent id vs Carpet player name
+
+Today:
+- Env agents are `gatherer_0`, `builder_0`, etc. (`wrapper.py`)
+- Carpet spawn uses pool names like `Bjorn` (`agent.py`)
+- M1A `observationsAll()` keys JSON by **player name**
+- `dispatch_skill()` and `getPlayer()` use whatever string Python passes
+
+So `env.step({"gatherer_0": act})` will dispatch to a non-existent player, while obs come back keyed as `"Bjorn"`. M0 hid this because Java returned `{}`.
+
+**Fix direction (pick one and document it in the plan):**
+- **A)** Use Carpet `agent_name` as the PettingZoo agent id everywhere, or  
+- **B)** Keep `gatherer_0` but add an explicit `agent_id → player_name` map (identity DB + env config), used in `_read_all_obs`, `dispatch_skill`, and smoke tests.
+
+Task 19 (role plumbing) does not solve this.
+
+### 2. Missing Python obs decode layer (plan mentions it, no task implements it)
+
+`CoreObsBuilder` emits `agent_uuid`, `role_id`, and **string** `minecraft:oak_log` item ids. Gym spaces expect:
+- `agent_uuid_embed` (384-d)
+- `role_one_hot` (4,)
+- `inv_slot_item_ids` as `MultiDiscrete(1024)`
+
+Task 15 only patches `goal_embedding`. There is no task for:
+- UUID → embed (even a deterministic hash embed is fine for M1A)
+- `role_id` → one-hot
+- item string → integer id (stable hash into `[0, 1024)` is enough for pipeline)
+- `goal_ticks_left` (can decrement in Python from stub subgoal)
+
+Without this, `_decode_obs()` will produce wrong dtypes/shapes and reward tests that use string inventory keys won’t match live obs.
+
+### 3. Action mask inputs not emitted by Java
+
+`compute_gatherer_action_mask()` expects `target_chest_in_range` and `target_resource_in_range`. `CoreObsBuilder` / `GathererOverlayBuilder` never set them. Masks will be wrong (e.g. HARVEST always allowed or always blocked depending on defaults).
+
+Add small booleans in Java (or derive in Python from `g_nearest_resources` / chest scan) and document in T9/T10.
+
+### 4. Episodic memory not wired in T16 (contradicts plan goal)
+
+The header says M1A replaces “count-only stub” with real Chroma writes in the loop. T17 implements the writer, but **T16 never calls** `importance_score()` / `EpisodicMemoryWriter.maybe_write()` in `step()`.
+
+The completion checklist (“`memory inspect` returns records after a few drives”) only works if you either:
+- Wire memory in `env.step()` (spec §4.6 step 8), or  
+- Add a separate task that `drive` + manual write path uses.
+
+Right now T17 alone does not satisfy the stated goal.
+
+### 5. `advance_tick_await_events` semantics vs 20 Hz RL (Plan B landmine)
+
+`Py4JEntryPoint` docstring says “advance one tick”; M1A `MotorBridge` only **polls a completion queue** while the dedicated server ticks on its own.
+
+For `agent drive` + live server: **OK** (server runs at 20 TPS; blocking until completion works).
+
+For `env.step()` at 20 Hz in Plan B: **problematic** if each step blocks until skill completion. A NAVIGATE can take hundreds of ticks; one `step()` would wall-clock for seconds and preempt logic would abort skills every tick if you dispatch every step.
+
+**Recommendation for M1A:** Document explicitly: “M1A `env.step()` may block until completion or timeout; Plan B must change to **one RL step ≈ one server tick**, skills persist across steps, completions are non-blocking.” Optionally add a stub `advanceOneTick()` on Java in M1A so the API exists.
+
+Also: preempt-on-new-dispatch is fine only if the policy mostly emits WAIT while a skill runs — worth stating in Plan B training notes.
+
+---
+
+## Should-fix (high confidence)
+
+| Issue | Notes |
+|--------|--------|
+| **T21 uses G1GC** | `-XX:+UseG1GC` in manual server start contradicts your approved ZGC carry-forward. Use the same ZGC flags as production compose. |
+| **`_decode_obs` is module-level** | T15 wants `self._stub_goal_embed` inside `_decode_obs`; refactor to method or pass `goal_embed` into decode (plan hints this but easy to miss). |
+| **LAZY_INACTION rule** | Increments when `skill_type` repeats, not when WAIT/NOOP repeats. Repeating HARVEST resets the streak incorrectly. Track “idle skills” only. |
+| **Idempotency set growth** | `dispatched` per agent never clears; long runs leak memory. Prune on terminal `CompletionEvent`. |
+| **Harvest `scalar_param` parsing** | Checks `isJsonArray()` only; Gym may send a scalar or ndarray — accept number or one-element array. |
+| **JSON dispatch** | Add `encode_action()` that converts numpy scalars/arrays to plain Python lists before `json.dumps` (spec references this; not in M1A tasks). |
+| **Jar / mod version** | Still `aiutopia-mod-0.0.0-m0.jar` after major behavior change — bump to `m1a` to avoid deploying wrong jar. |
+| **Integration test** | `test_env_smoke.py` uses `gatherer_0` without spawn; after real obs, extend smoke to spawn + map name, or document “spawn before env”. |
+| **`biome_id`** | Java emits string; space is `Discrete(64)` — hash or map in decode. |
+
+---
+
+## Scope / simplifications (acceptable if explicit)
+
+These are fine for M1A **if labeled as intentional shortcuts** (you mostly do):
+
+- Direct `setPosition` movement (no collision/path) — OK; Baritone deferred to Plan B  
+- `target_class` as Java int → substring table — OK for “chop oak_log”  
+- Single-y-layer `g_resource_grid` — OK vs full 3D in spec  
+- `world.breakBlock(..., agent)` — verify on Carpet fake player once; may need attack/use packets later  
+- BULK_FARMING deferred — correct  
+- No Baritone — aligned with plan intro  
+
+---
+
+## What the plan gets right
+
+- Clear **M1A vs M1-Training** boundary (no PPO yet).  
+- Skill executor pattern matches §4.6 (multi-tick, completion events, preempt, idempotency intent).  
+- Reward stack (`r_primary + PBRS - death - time - exploit - clip`) matches §5.1.  
+- Gatherer primary uses `LOG_VALUE` on deltas; PBRS uses capped `tech_tree_potential` — matches your §5.4 intent.  
+- ExploitDetector covers 5/6 per-agent rules; BULK_FARMING correctly env-level later.  
+- Batched `observationsAll()` preserved (T11).  
+- `agent drive` CLI is the right verification tool.  
+- T19 role plumbing is necessary for M2+.  
+- Self-review section and handoff to Plan B are useful.  
+- `TargetState.threat_neutralized` is already fixed in M0 schemas (good).
+
+---
+
+## Questions for you
+
+1. **Agent naming:** Do you want PettingZoo ids to **be** Carpet names (`Bjorn`), or keep `gatherer_0` with a persistent map in identity DB / env config?
+
+2. **M1A env semantics:** Is it acceptable for M1A `env.step()` to block until skill completion (skill-level steps), with tick-sync deferred to Plan B? Or do you want tick-sync designed now?
+
+3. **Training world workflow:** For Plan B, will `env.reset()` call `carpet_spawn` automatically, or always “CLI spawn first, then attach env”? That affects T20 smoke and future Ray workers.
+
+4. **Item id encoding for M1A:** Full 1.21 registry table (~1024), or stable hash of `minecraft:oak_log` strings for pipeline only?
+
+5. **Fake-player breaking:** Have you already verified Carpet fake players can break blocks and pick up drops on your server-runtime? If not, I'd add an explicit sub-step in T21 before tagging `m1a-verified`.
+
+6. **Memory in loop:** Should M1A wire `EpisodicMemoryWriter` in `env.step()` (full §4.6), or only prove Chroma via unit tests + manual `memory inspect` after adding a small “record tick” hook in `drive`?
+
+---
+
+## Suggested plan edits (summary)
+
+Add tasks (or expand T15/T16/T11):
+
+- **T11b / T16:** `agent_id ↔ player_name` resolution  
+- **T15b:** `_decode_obs` enrichment (uuid embed, role one-hot, item ids, `goal_ticks_left`, mask fields)  
+- **T16b:** episodic memory in `step()` using `importance_score()`  
+- **T7b:** document or stub tick-advance API for Plan B  
+- Fix T21 JVM flags to ZGC  
+- Fix LAZY_INACTION + idempotency pruning in T13/T7  
+
+---
+
+If you answer the naming + env-semantics questions (1–2), I can suggest a concrete “revised task list” ordering for execution (still in Ask mode — no file edits). When you are ready to apply fixes to the plan itself, switch to Agent mode and we can patch `M1A_PIPELINE_PLAN.md` directly.
+
+Gemini 3.1 Pro (High) Via Antigravity
+Viewed M1A_PIPELINE_PLAN.md:1-800
+Viewed M1A_PIPELINE_PLAN.md:800-1599
+Viewed M1A_PIPELINE_PLAN.md:1599-2398
+Viewed M1A_PIPELINE_PLAN.md:2398-3116
+Searched for "_role_of"
+Searched for "_role_of"
+Searched for "_role_of"
+
+This is an exceptionally well-structured and disciplined plan. The TDD boundaries are clean, the Java-Python bridging is handled carefully, and the critical M0 bugs (ZGC, package-private `ServerTask`) are correctly fixed or carried forward. 
+
+However, looking at the M1A implementation details against the constraints of Minecraft's engine and the RL pipeline, there is **one critical showstopper bug** and a few should-fixes that need to be addressed before execution.
+
+Here is my review of the `M1A_PIPELINE_PLAN.md`:
+
+### 🚨 Critical Fix (Must Fix before execution)
+
+**1. The "Phasing Through Walls" Bug (`NavigateSkill`, `HarvestSkill`, `DepositChestSkill`)**
+In Tasks 2, 3, and 4, the movement logic calculates a delta and moves the agent using:
+```java
+agent.setPosition(next.x, next.y, next.z);
+```
+**Why this fails:** `setPosition()` literally teleports the entity, bypassing Minecraft's collision detection engine and gravity. The agent won't "press against" a tree or hill as the plan describes; it will phase directly through solid terrain, and if the target is in the air, it will fly. For an RL agent, this ruins spatial learning because the agent will learn to clip through walls instead of navigating around them.
+**The Fix:** You have two options here:
+*   *Option A (Programmatic):* Use `agent.move(net.minecraft.entity.MovementType.SELF, stepVec)`. This runs the movement through vanilla AABB collision logic, so the agent will bump into walls and fall with gravity.
+*   *Option B (Carpet ActionPack - Recommended):* Since Carpet is already installed, fetch the agent's `EntityPlayerActionPack` and send `forward` and `look` synthetic inputs. This is much safer as it natively handles gravity, collision, and even 1-block auto-stepping without you having to simulate physics.
+
+### 🟡 Should-Fixes (High confidence improvements)
+
+**2. Python `hash()` Non-Determinism (Task 13 - `exploit.py`)**
+In `_inv_hash`, the inventory is hashed using Python's built-in `hash(tuple(...))`. 
+**Why this fails:** Python's `hash()` uses SIPHash with a random seed generated at process startup. While it's consistent *during* a run, it will produce different values across different runs. The spec demands a strict determinism harness (comparing weights and actions across runs); random hashes in logs and replay traces will create flaky determinism diffs.
+**The Fix:** Since `INV_REPEAT_BUF_SIZE` is only 10, don't hash it at all. Python tuples are directly comparable. Just store the raw `tuple(zip(ids, counts))` directly in the deque and use `list(self.inv_snapshots).count(snap)`.
+
+**3. Java `Math.abs` Edge Case (Task 10 - `GathererOverlayBuilder`)**
+```java
+return Math.abs(Registries.ENTITY_TYPE.getId(e.getType()).toString().hashCode() % 256) / 256.0;
+```
+Because of how two's complement math works, `Math.abs(Integer.MIN_VALUE)` is a negative number. While the `% 256` inside the `abs()` saves this from crashing, it's a known Java gotcha that's better avoided.
+**The Fix:** Use a bitwise AND to mask the sign bit instead: 
+```java
+return (id.hashCode() & 0xFF) / 256.0;
+```
+
+**4. `GathererOverlayBuilder` Y-Level Scan (Task 10)**
+The resource grid scan loop goes from `dy = 3` down to `-3` and `break`s on the first non-air block. This effectively generates a top-down surface heightmap. 
+This is perfectly fine for the M1 Gatherer (who only needs surface wood/crops), but won't "see" ores if they are exposed in the wall of a cave underneath a surface block. Just verifying this is the intended M1-Pipeline simplification!
+
+### ❓ Questions for Alignment
+
+1. **Elevation / Step-height:** If we switch to `agent.move()` to fix the collision bug, the agent will get stuck on 1-block elevation changes (like a hill) unless it jumps. Do we want to implement jumping logic in `NavigateSkill`, or just accept that the agent will get stuck on hills during M1? (This is why the Carpet ActionPack is great—it can handle standard walk physics).
+2. **Scan Radius Performance:** `HarvestSkill` scans a 17x17x17 cube (~4,900 blocks) synchronously on the main server thread every time it needs a target. For M1 with 4 agents, this is totally fine, but it might create micro-stutter if heavily spammed at 20 TPS. Are we okay leaving this O(R³) scan as-is for M1-Pipeline and optimizing it with an event-driven cache in M2?
+
+If you agree with these fixes, I can modify the `M1A_PIPELINE_PLAN.md` document directly, or we can jump straight into execution!
+
+Codex GPT5.5 ExtraHigh Reasoning
+Operating as code-reviewer primary, with reinforcement-learning-specialist, pytorch-training-specialist, java-kotlin-specialist, system-architect, qa-tester, and python-specialist consulted.
+I did not edit anything.
+Verdict: fix before execution. The plan is directionally good, but I would not start implementing it as-is. There are several issues that would either break the build or give you a false “M1A verified” while the actual Plan B training path is still unwired.
+Critical Findings
+M1A_PIPELINE_PLAN.md (line 2957) starts the live server with -XX:+UseG1GC. This reintroduces one of the M0 critical bugs. Use the ZGC flags everywhere, including one-off smoke runbooks.
+
+CoreObsBuilder plan (line 1239) emits string item IDs, biome IDs, and scalar values, but spaces.py (line 49) expects numeric arrays with exact shapes. inv_slot_item_ids, main_hand_item_id, off_hand_item_id, biome_id, scalar Box fields, and flat g_resource_grid will not conform. Also Registries.BIOME does not exist in the local MC 1.21.1 mapped jar, so that snippet will not compile. Fix by emitting raw numeric IDs, reshaping decoded arrays, and using RegistryKeys.BIOME via the world registry manager.
+
+The existing action mask will disable HARVEST forever. action_mask.py (line 41) requires target_resource_in_range and target_chest_in_range, but the M1A observation plan never emits them. Either add those raw booleans in GathererOverlayBuilder or update the mask to infer them from g_nearest_resources / chest scans.
+
+The plan does not actually prove env.step() works against a live Carpet agent. The env uses logical IDs like gatherer_0 from wrapper.py (line 67), while WorldOps.observationsAll() will key observations by spawned player names from AgentRegistry. The smoke test drives the CLI-spawned name directly, bypassing the env. Add a real env-level smoke: reset/spawn or map gatherer_0 -> playerName, step through NAVIGATE/HARVEST, assert non-empty real obs and no "agent player not found" completion.
+
+MotorBridge.advanceTickAwaitEvents (line 1012) waits for skill completion, so one env.step() can block for seconds and become a skill-boundary transition, not a 20 Hz tick transition. That conflicts with the locked design. Split “tick advanced” from “skill completed”: env step should advance one tick and return any completion events that happened, while active multi-tick skills continue without being preempted every step.
+
+“Memory writes live” is not wired. Task 17 (line 2457) makes the writer capable of Chroma writes, but Task 16 (line 2364) never creates EpisodicRecords or calls maybe_write(). The completion checklist item that memory inspect returns records after drives will fail unless env/CLI drive creates records.
+
+Important Fixes
+M1A_PIPELINE_PLAN.md (line 1176) intentionally commits uncompilable Java in T8/T9. Combine T8-T10 into one compile-green task/commit.
+
+HarvestSkill (line 476) breaks blocks but relies on dropped item pickup. Reward may not see inventory gain at completion. For M1A determinism, either insert drops directly into inventory using block drop APIs or add a pickup wait and assert inventory changed.
+
+NavigateSkill (line 324) uses setPosition, allowing collision bypass and vertical movement. If this motor feeds training, the policy can learn fly/clip behavior. At minimum clamp M1 navigate to horizontal movement and document this as server-authoritative skill motion.
+
+GoalSpecAdapter hash nondeterminism (line 45) should be fixed in M1A, not deferred to Plan B, because M1A starts putting goal embeddings into observations.
+
+Add one high-signal test: observation_space("gatherer_0").contains(obs["gatherer_0"]) after decoding a live Java obs. This would catch most obs shape/type problems immediately.
+
+Question
+Is M1A meant to end with “manual CLI can move/chop” only, or should it leave the PettingZoo env genuinely Plan-B-ready? I strongly recommend the latter: make the final gate a live AiUtopiaPettingZooEnv.reset() + step() against a real spawned gatherer with valid obs, enabled harvest mask, positive reward on controlled oak-log gain, and a Chroma memory record.
+
+Kimi 2.6 Thinking
+ I read the full M1A_PIPELINE_PLAN.md (3115 lines) and spot-checked the M0 codebase to validate assumptions. Here's my
+  review.
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  🔴 CRITICAL — Must Fix Before Execution
+  1. T21 Step 1: G1GC regression (line 2960)
+  Problem: The manual verification step tells the user to launch the server with -XX:+UseG1GC. This is a direct reversal
+  of M0 Critical Bug #1. G1GC's 200ms pauses will stall the 20 Hz tick loop and corrupt RL timing.
+  Fix: Change T21 Step 1 to Generational ZGC, matching the M0 spec:
+  java -Daiutopia.py4j.port=25099 -Xms3g -Xmx3g \
+      -XX:+UseZGC -XX:+ZGenerational -XX:+UnlockExperimentalVMOptions \
+      -XX:+UseTransparentHugePages -XX:+AlwaysPreTouch \
+      -jar fabric-server-launcher.jar nogui
+  2. T9 CoreObsBuilder + T16: Scalar vs shape-(1,) array mismatch
+  Problem: CoreObsBuilder emits scalar JSON numbers for fields that spaces.py defines as Box(..., (1,), np.float32):
+  • health, hunger, saturation, armor_value
+  • tick_in_episode, goal_ticks_left, time_of_day, light_level
+  _decode_obs does np.asarray(raw[key], ...) on a scalar 20.0, producing a 0-dimensional array array(20.0) with shape ()
+  . The Gymnasium Box expects shape (1,), so space.contains() will fail. More importantly, T16 does:
+  new_obs.get(agent, {}).get("health", [20.0])[0] <= 0
+  On a 0-d array, [0] raises IndexError: too many indices for array: array is 0-dimensional, but 1 were indexed.
+  M0 never hit this because its stub returned {} and missing fields were filled with np.zeros((1,), ...). M1A will crash
+  on the first real observation.
+  Fix (recommended): In T9 CoreObsBuilder, wrap all scalar fields in single-element arrays:
+  obs.add("health", vec(agent.getHealth()));          // instead of addProperty
+  obs.add("hunger", vec(agent.getHungerManager().getFoodLevel()));
+  // ... same for saturation, armor_value, tick_in_episode, goal_ticks_left, time_of_day, light_level
+  Alternatively, fix _decode_obs in wrapper.py to reshape scalars to (1,) when the space expects it. I recommend the Jav
+  a fix since T9 is already being modified.
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  🟡 SHOULD FIX — High Confidence
+  3. T7 MotorBridge: attachServer double-registers tick callback
+  Problem: ServerTickEvents.END_SERVER_TICK.register(this::onServerTick) is called every time attachServer runs. If the
+  server restarts or detachServer→attachServer is called, multiple callbacks accumulate. The Fabric event system has no
+  unregister handle.
+  Fix: Add an idempotency guard:
+  private boolean tickRegistered = false;
+
+  public void attachServer(MinecraftServer server) {
+      if (this.server != null) return;  // already attached
+      this.server = server;
+      if (!tickRegistered) {
+          ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
+          tickRegistered = true;
+      }
+  }
+  4. T13 ExploitDetector: LAZY_INACTION tracks consecutive same action, not "80 of last 100 lazy"
+  Problem: The spec §5.3 says: >80 of last 100 = WAIT/NOOP. The implementation tracks idle_streak which increments only
+  when sk == self.last_action_skill_type:
+  if sk == self.last_action_skill_type:
+      self.idle_streak += 1
+  else:
+      self.idle_streak = 0
+  This means WAIT, NOOP_BROADCAST, WAIT, NOOP_BROADCAST never triggers, even though 100% of actions are lazy. The spec i
+  ntended a sliding window, not consecutive identical actions.
+  Fix: Either implement a sliding window (e.g., deque(maxlen=100) of booleans) or document the deviation. For M1A, a 10-
+  line sliding window is worth it:
+  self.lazy_window: deque[bool] = field(default_factory=lambda: deque(maxlen=100))
+  # in step():
+  self.lazy_window.append(sk in LAZY_SKILL_TYPES)
+  if sum(self.lazy_window) > LAZY_IDLE_TICKS:
+      penalties.append((ExploitName.LAZY_INACTION, 0.2))
+  5. T10 GathererOverlayBuilder: Math.abs(hashCode()) can return negative
+  Problem: typeIdForEntity does:
+  Math.abs(Registries.ENTITY_TYPE.getId(e.getType()).toString().hashCode() % 256) / 256.0
+  Math.abs(Integer.MIN_VALUE) == Integer.MIN_VALUE (still negative). The result can be negative, producing a negative ty
+  pe ID.
+  Fix: Use bitwise-and:
+  return ((id.hashCode() & 0x7FFFFFFF) % 256) / 256.0;
+  6. T13 ExploitDetector: _inv_hash uses non-deterministic hash()
+  Problem: _inv_hash uses Python's built-in hash(), which is randomized per process (PYTHONHASHSEED). This breaks determ
+  inism replay. This is the same class of issue your M0 self-review already flagged for GoalSpecAdapter.build_structured
+  _features.
+  Fix: Use a stable hash like zlib.adler32 or xxhash on a canonical byte string:
+  def _inv_hash(obs: dict[str, Any]) -> int:
+      canonical = json.dumps([
+          list(obs.get("inv_slot_item_ids", [])),
+          list(obs.get("inv_slot_counts", [])),
+      ], sort_keys=True)
+      return zlib.crc32(canonical.encode())
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  🟢 NICE TO HAVE / Notes
+  7. T3 HarvestSkill item pickup latency: world.breakBlock drops items as entities. The fake player picks them up automa
+     ally, but it may take 1-2 ticks. If observationsAll reads immediately after the break, the inventory delta might la
+     y one tick. For M1A this is fine, but be aware that reward signals may be delayed by 1 tick. Document this in a com
+     t.
+  8. T4 DepositChestSkill deposits armor/offhand: agent.getInventory().size() is 41 (36 main + 4 armor + 1 offhand). The
+     op deposits everything. For M1A "deposit all" semantics this is acceptable, but you may want to limit to PlayerInve
+     ry.MAIN_SIZE (36) if the intent is main-inventory-only.
+  9. T2 NavigateSkill uses setPosition not velocity: This teleports the player each tick rather than simulating movement
+     t will clip through blocks and won't trigger pressure plates, tripwires, etc. The plan already notes this is intent
+     al ("No obstacle handling — Baritone is Plan B"). Just confirming this is a known limitation.
+  10. T11 jar filename stays aiutopia-mod-0.0.0-m0.jar: The plan copies the new build over the old M0 jar name. Consider
+      ping the mod version in fabric_mod/build.gradle or gradle.properties to 0.0.0-m1a so you can tell jars apart in se
+      -runtime/mods/.
+  11. T20 smoke test check=False on HARVEST: The test allows IMMEDIATE_FAILURE if no tree is nearby, which is correct fo
+      generic world seed. Consider adding a comment that this is biome-dependent.
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ❓ Questions for You
+  Q1: Agent name mismatch between env and CLI In M0, AiUtopiaPettingZooEnv.agents_init = [f"{r}_0" for r in active_roles
+  ] (e.g., gatherer_0). But aiutopia agent spawn creates a Carpet fake player with a skin-pool name like Gatherer_A1. Wo
+  rldOps.observationsAll keys observations by the Carpet player name (from AgentRegistry.snapshot()), not by gatherer_0.
+  This means when Plan B (training) runs, _read_all_obs won't find gatherer_0 in the Java JSON and will return empty/zer
+  o observations for that agent. Is this a known gap you're deferring to Plan B? Or do you want M1A to add an env-side s
+  pawn during reset() that aligns the names?
+  Q2: GoalSpecAdapter fallback in T15 T15 adds a _ZeroBGE fallback if sentence-transformers isn't installed. GoalSpecAda
+  pter.embed() concatenates BGE output (384-d) with structured features (128-d). If _ZeroBGE returns zeros, the structur
+  ed features still get concatenated, so the goal embed is [0..0, structured...]. Is this intentional for M1A (partial g
+  oal signal), or should the fallback produce a full 512-d zero vector?
+  Q3: Memory writer flush boundary T17's EpisodicMemoryWriter buffers MEDIUM records and requires an explicit flush(). T
+  16's env.step() doesn't call writer.flush(). When does the MEDIUM buffer get flushed in M1A? Should env.step() call fl
+  ush() every N ticks, or is this deferred to Plan B's training loop?
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Overall, the plan is solid and well-scoped. The architecture matches the spec, task boundaries are clean, and the TDD
+  discipline is maintained. The two critical issues (#1 G1GC, #2 scalar/array mismatch) are the only ones I'd block exec
+  ution on — everything else can be addressed during implementation or noted as known limitations.
+
+  Want me to patch the two critical bugs directly into M1A_PIPELINE_PLAN.md?
