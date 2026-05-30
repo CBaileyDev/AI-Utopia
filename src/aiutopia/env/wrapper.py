@@ -137,6 +137,22 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
         self.max_ticks = int(config.get("max_episode_ticks", 6_000))
         self._tick = 0
 
+        # Arena-bounds truncation box (N19-followup). step() hard-truncates the
+        # agent outside this box so wandering training episodes reset fast and
+        # the on-policy buffer stays oak_log-adjacent (see step()). The box is
+        # configurable so non-flat-arena operation (e.g. natural-forest recon)
+        # can run without instant truncation. DEFAULTS ARE BYTE-IDENTICAL to the
+        # hardcoded N19 box (center 64.5/-47.5, ±24 horizontally, y>=60):
+        #   arena_bounds_check   — False disables the box entirely (no bounds trunc)
+        #   arena_center_xz      — (cx, cz) horizontal box center
+        #   arena_half           — half-extent in blocks (|dx|>half or |dz|>half)
+        #   arena_min_y          — minimum y (below → out of bounds)
+        self.arena_bounds_check = bool(config.get("arena_bounds_check", True))
+        _ac = config.get("arena_center_xz", (64.5, -47.5))
+        self.arena_center_xz = (float(_ac[0]), float(_ac[1]))
+        self.arena_half = float(config.get("arena_half", 24.0))
+        self.arena_min_y = float(config.get("arena_min_y", 60.0))
+
         # N10: per-skill server-side timeout_ticks injected into every action
         # before dispatch. The Java defaults (NAVIGATE/HARVEST = 6000 ticks)
         # were tuned for vanilla TPS=20 (= 5 min wall) which becomes 20s wall
@@ -451,11 +467,15 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
             # buffer to oak_log-adjacent trajectories.
             agent_pos = new_obs.get(agent, {}).get("position", None)
             out_of_bounds = False
-            if agent_pos is not None and len(agent_pos) >= 3:
-                dx = float(agent_pos[0]) - 64.5
-                dz = float(agent_pos[2]) - (-47.5)
+            if self.arena_bounds_check and agent_pos is not None and len(agent_pos) >= 3:
+                dx = float(agent_pos[0]) - self.arena_center_xz[0]
+                dz = float(agent_pos[2]) - self.arena_center_xz[1]
                 y = float(agent_pos[1])
-                if (abs(dx) > 24.0) or (abs(dz) > 24.0) or (y < 60.0):
+                if (
+                    (abs(dx) > self.arena_half)
+                    or (abs(dz) > self.arena_half)
+                    or (y < self.arena_min_y)
+                ):
                     out_of_bounds = True
             trunc[agent] = (self._tick >= self.max_ticks) or out_of_bounds
             info[agent] = {
