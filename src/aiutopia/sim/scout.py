@@ -38,7 +38,7 @@ from collections import deque
 
 from aiutopia.sim.obs_adapter import GRID_RADIUS
 
-__all__ = ["FrontierScout"]
+__all__ = ["FrontierScout", "SweepScout"]
 
 # 8-connectivity offsets for connected-component grouping (WFD groups adjacent
 # frontier cells, including diagonals).
@@ -190,3 +190,76 @@ class FrontierScout:
             # Degenerate: centroid on top of the agent -> no meaningful direction.
             return None
         return (ddx / norm, ddz / norm, dist)
+
+
+class SweepScout:
+    """A COMMITTED ring-sweep producer (partial-info, same interface as FrontierScout).
+
+    The greedy WFD ``FrontierScout`` dithers (it re-picks the nearest frontier each
+    step and never commits to traverse outward), so on the omni arena it only
+    modestly beats a fixed heading. ``SweepScout`` instead visits a fixed ring of
+    waypoints at radius ``R`` around the SPAWN point, one compass sector at a time,
+    so it systematically sweeps ALL directions — guaranteed to bring a cluster at
+    radius ~``R`` within the 16-block perception regardless of its bearing.
+
+    It uses only the agent's reported position (captured spawn + current pos); it
+    reads NO ground truth (same invariant as FrontierScout). ``observe`` /
+    ``observe_resources`` exist for interface parity; only the first ``observe``
+    (or ``bearing``) call is used, to capture the spawn origin.
+
+    n_dirs=12 at R=28: adjacent ring points are ~14.5 blocks apart (< 2*16
+    perception), so the swept ring has no perception gaps; a cluster anywhere on
+    the ring is seen at some waypoint.
+    """
+
+    def __init__(self, n_dirs: int = 12) -> None:
+        # Search directions, evenly spaced over the full circle.
+        self._dirs: list[tuple[float, float]] = [
+            (math.cos(2.0 * math.pi * k / n_dirs), math.sin(2.0 * math.pi * k / n_dirs))
+            for k in range(n_dirs)
+        ]
+        self._idx = 0
+        self._phase_out = True  # True: hop OUT in dirs[idx]; False: hop BACK to spawn
+        self._spawn: tuple[int, int] | None = None
+        # Present for interface parity with FrontierScout (unused by the sweep).
+        self.observed: set[tuple[int, int]] = set()
+        self.resource_seen: set[tuple[int, int]] = set()
+
+    def _ensure_spawn(self, bx: int, bz: int) -> None:
+        if self._spawn is None:
+            self._spawn = (int(bx), int(bz))
+
+    def observe(self, bx: int, bz: int) -> None:
+        self._ensure_spawn(bx, bz)
+
+    def observe_resources(self, cells: list[tuple[int, int]]) -> None:
+        return None
+
+    def bearing(self, bx: int, bz: int) -> tuple[float, float, float] | None:
+        """OUT-and-BACK sweep matched to the NAVIGATE dynamics (each dispatch moves
+        a FIXED ~MAX_NAV_RANGE=32 blocks in the bearing direction, NOT "to a point").
+
+        Each blind step is one 32-block hop, so we alternate: OUT (hop 32 in
+        ``dirs[idx]`` → lands at radius ~32, where a cluster at radius 24-30 in
+        roughly that direction enters the 16-block perception), then BACK (hop
+        toward spawn), then rotate to the next direction. Radius-32 out-hops stay
+        inside the omni arena (arena_half~40), so the agent never pins on the wall
+        (the failure mode of a waypoint-tracking sweep). 12 directions ⇒ every
+        bearing is within 15° of some hop ⇒ a cluster in ANY direction is swept."""
+        self._ensure_spawn(bx, bz)
+        ax, az = float(bx), float(bz)
+        assert self._spawn is not None
+        if self._phase_out:
+            dx, dz = self._dirs[self._idx]
+            self._phase_out = False
+            return (dx, dz, 32.0)
+        # BACK toward spawn, then rotate to the next direction.
+        ddx = self._spawn[0] - ax
+        ddz = self._spawn[1] - az
+        self._phase_out = True
+        self._idx = (self._idx + 1) % len(self._dirs)
+        norm = math.hypot(ddx, ddz)
+        if norm < 1e-9:
+            dx, dz = self._dirs[self._idx]
+            return (dx, dz, 32.0)
+        return (ddx / norm, ddz / norm, norm)

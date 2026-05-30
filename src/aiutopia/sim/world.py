@@ -130,9 +130,12 @@ class SimWorld:
         if arena_mode == "mixed":
             arena_mode = "clusters" if (int(seed) % 2 == 1) else "trees"
         rng = _JavaRandom(seed)
-        bases = (
-            self._cluster_bases(rng) if arena_mode == "clusters" else self._tree_grid_bases(rng)
-        )
+        if arena_mode == "clusters":
+            bases = self._cluster_bases(rng)
+        elif arena_mode == "clusters_omni":
+            bases = self._cluster_omni_bases(rng)
+        else:
+            bases = self._tree_grid_bases(rng)
         n = len(bases) * TRUNK_H
         logs = np.zeros((n, 3), dtype=np.int64)
         idx = 0
@@ -142,6 +145,42 @@ class SimWorld:
                 idx += 1
         self.logs = logs
         self.log_alive = np.ones(n, dtype=bool)
+
+    @staticmethod
+    def _cluster_omni_bases(rng: _JavaRandom) -> list[tuple[int, int]]:
+        """Non-degenerate clusters: cluster A near spawn (visible), cluster B on a
+        ring of radius `gap` in one of 8 UNIFORM compass directions around spawn.
+
+        Unlike ``_cluster_bases`` (whose B was always SOUTH — a constant heading
+        cleared it, so it never tested search), here B can be in ANY direction, so a
+        fixed heading clears only the ~3/8 of sectors that overlap it. This arena
+        REQUIRES omnidirectional search and is the honest testbed for a scout/producer.
+        Sim-only. Deterministic (np.cos/np.sin on a seeded sector — no RNG float).
+        """
+        ax = SPAWN_X + (rng.next_int(7) - 3)   # cluster A center, spawn-ish ±3
+        az = SPAWN_Z + (rng.next_int(7) - 3)
+        gap = 24 + rng.next_int(7)             # 24..30 (> 16-block perception)
+        sector = rng.next_int(8)               # 8 uniform directions
+        angle = float(sector) * (float(np.pi) / 4.0)
+        bx = SPAWN_X + int(round(gap * float(np.cos(angle))))
+        bz = SPAWN_Z + int(round(gap * float(np.sin(angle))))
+        # Wider bounds than `clusters` so the full ring fits (omni tests use
+        # arena_half ~40 so the agent can roam to B in any direction).
+        omin_x, omax_x, omin_z, omax_z = 24, 104, -88, -8
+        used: set[tuple[int, int]] = set()
+        bases: list[tuple[int, int]] = []
+        for cx, cz in ((ax, az), (bx, bz)):
+            for row in range(2):
+                for col in range(4):
+                    x = cx - 7 + 5 * col + (rng.next_int(3) - 1)
+                    z = cz - 3 + 6 * row + (rng.next_int(3) - 1)
+                    x = max(omin_x, min(omax_x, x))
+                    z = max(omin_z, min(omax_z, z))
+                    while (x == SPAWN_X and z == SPAWN_Z) or (x, z) in used:
+                        x += 1
+                    used.add((x, z))
+                    bases.append((x, z))
+        return bases
 
     @staticmethod
     def _tree_grid_bases(rng: _JavaRandom) -> list[tuple[int, int]]:

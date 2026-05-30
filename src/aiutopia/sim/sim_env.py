@@ -66,7 +66,7 @@ from aiutopia.env.spaces import (
 )
 from aiutopia.sim.obs_adapter import build_gatherer_obs, gatherer_nearest_columns
 from aiutopia.sim.reward_adapter import step_reward
-from aiutopia.sim.scout import FrontierScout
+from aiutopia.sim.scout import FrontierScout, SweepScout
 from aiutopia.sim.skills import apply_skill, mine_instance
 from aiutopia.sim.world import SimWorld
 
@@ -182,13 +182,15 @@ class AiUtopiaSimEnv(ParallelEnv):
         #     in this mode so a None scout bearing can never leak the oracle.
         #   "off": no bearing (all-zeros), regardless of resource_bearing_cue.
         self._scout_mode = str(config.get("scout_mode", "oracle"))
-        if self._scout_mode not in ("oracle", "real", "off"):
+        if self._scout_mode not in ("oracle", "real", "sweep", "off"):
             raise ValueError(
-                f"scout_mode must be one of oracle/real/off, got {self._scout_mode!r}"
+                "scout_mode must be one of oracle/real/sweep/off, "
+                f"got {self._scout_mode!r}"
             )
-        # One FrontierScout per agent in "real" mode (fresh per episode on reset);
-        # mirrors the _prev_obs / _prev_phi per-agent state pattern.
-        self._scouts: dict[str, FrontierScout] = {}
+        # One scout per agent in "real"/"sweep" mode (fresh per episode on reset):
+        # "real" = partial-info FrontierScout (greedy WFD); "sweep" = committed
+        # SweepScout (ring sweep). Mirrors the _prev_obs / _prev_phi per-agent state.
+        self._scouts: dict[str, FrontierScout | SweepScout] = {}
 
     def _build_obs(self, agent: str, world: SimWorld) -> dict[str, Any]:
         """Build the gatherer obs for ``agent``, routing the g_hostiles bearing
@@ -202,7 +204,7 @@ class AiUtopiaSimEnv(ParallelEnv):
           oracle).
         - "off": cue off, override=None -> all-zeros bearing.
         """
-        if self._scout_mode == "real":
+        if self._scout_mode in ("real", "sweep"):
             scout = self._scouts[agent]
             bx = int(math.floor(float(world.agent_pos[0])))
             bz = int(math.floor(float(world.agent_pos[2])))
@@ -252,6 +254,8 @@ class AiUtopiaSimEnv(ParallelEnv):
             # which reads self._scouts[agent] in "real" mode.
             if self._scout_mode == "real":
                 self._scouts[agent] = FrontierScout()
+            elif self._scout_mode == "sweep":
+                self._scouts[agent] = SweepScout()
             obs[agent] = self._build_obs(agent, world)
             self._prev_phi[agent] = _log_potential(world)
         self._prev_obs = obs

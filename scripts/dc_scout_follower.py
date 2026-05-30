@@ -37,7 +37,8 @@ SEEDS = [
     ).split(",")
 ]
 MAX_TICKS = int(os.environ.get("DC_MAX_TICKS", "200"))
-ARENA_HALF = 34.0
+ARENA = os.environ.get("DC_ARENA", "clusters")  # "clusters" (degenerate) | "clusters_omni"
+ARENA_HALF = float(os.environ.get("DC_HALF", "40.0" if "omni" in ARENA else "34.0"))
 _FIXED_DIR = np.array([0.0, 0.0, -1.0], np.float32)
 
 
@@ -58,13 +59,15 @@ def _act(skill: int, sp=None) -> dict:
 
 
 def _env_config(mode: str) -> dict:
-    # mode in {"oracle","real","fixed"}; "fixed" uses scout_mode off + a constant heading.
-    scout_mode = {"oracle": "oracle", "real": "real", "fixed": "off"}[mode]
+    # mode in {"oracle","real","sweep","fixed"}; "fixed" uses scout off + constant heading.
+    scout_mode = {
+        "oracle": "oracle", "real": "real", "sweep": "sweep", "fixed": "off"
+    }[mode]
     ec = {
         "stage": 1,
         "active_roles": ["gatherer"],
         "decision_core": True,
-        "arena_mode": "clusters",
+        "arena_mode": ARENA,
         "arena_half": ARENA_HALF,
         "randomize_layout": False,
         "distance_shaping": False,
@@ -111,7 +114,8 @@ def main() -> int:
     _p(f"  held-out seeds={SEEDS}  max_ticks={MAX_TICKS}")
     _p("=" * 74)
     summary = {}
-    for mode in ("oracle", "real", "fixed"):
+    modes = [m.strip() for m in os.environ.get("DC_MODES", "oracle,real,sweep,fixed").split(",")]
+    for mode in modes:
         rows = [_run_one(mode, s) for s in SEEDS]
         cleared = sum(r["cleared"] for r in rows)
         summary[mode] = (cleared, len(rows))
@@ -123,23 +127,24 @@ def main() -> int:
             )
         _p(f"   -> {cleared}/{len(rows)} cleared")
     _p("\n" + "=" * 74)
-    _p("SUMMARY (follower clearance by bearing source)")
-    for mode in ("oracle", "real", "fixed"):
+    _p(f"SUMMARY (follower clearance by bearing source, arena={ARENA})")
+    for mode in modes:
         c, n = summary[mode]
-        _p(f"   {mode:<6} {c}/{n}")
-    o = summary["oracle"][0]
-    r = summary["real"][0]
-    f = summary["fixed"][0]
+        _p(f"   {mode:<7} {c}/{n}")
+    o = summary.get("oracle", (None, 0))[0]
+    f = summary.get("fixed", (None, 0))[0]
     _p("")
-    if r >= max(1, o - 1):
-        _p(">>> real-scout ~= oracle: FORK A VALIDATED end-to-end (scout bearings suffice).")
-    elif r <= f + 1:
-        _p(">>> real-scout ~= fixed-floor: the scout's bearings are the HARD part (open).")
-    else:
-        _p(
-            f">>> real-scout PARTIAL ({r}/{summary['real'][1]}): "
-            f"between floor({f}) and oracle({o})."
+    # Report each scout (real/sweep) relative to the fixed-heading floor + oracle ceiling.
+    for mode in modes:
+        if mode in ("oracle", "fixed"):
+            continue
+        s, n = summary[mode]
+        verdict = (
+            "~= oracle: PRODUCER VALIDATED" if (o is not None and s >= o - 1)
+            else "~= fixed-floor: no better than no-info" if (f is not None and s <= f + 1)
+            else "PARTIAL: between floor and oracle"
         )
+        _p(f">>> {mode}-scout {s}/{n}  ({verdict}; floor={f}, ceiling={o})")
     return 0
 
 
