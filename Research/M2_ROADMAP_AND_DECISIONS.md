@@ -9,10 +9,28 @@ are all **dropped or trivial**. The D3 survival-recon "dies step 1" result is mo
 What REMAINS (the focus): natural terrain + survival mechanics (timed breaking, tools,
 scattered forests), gather/build/farm roles, multi-agent cooperation — and the
 Explorer "find the forest" problem, which is now REAL + testable (the flat toy had no
-exploitable signal; a natural world does → this unblocks D1). **Key first risk:** the
-obs scans topmost-non-air per column → on natural trees that's LEAVES, so logs may be
-invisible (Phase-D scoping §3.2). Recon in progress: can the proven Lumberjack perceive
-+ harvest real forest trees on peaceful natural terrain?
+exploitable signal; a natural world does → this unblocks D1).
+
+## ✅ PHASE 1 COMPLETE (2026-05-30, ~17:30–18:30) — Natural-world infrastructure ready
+
+**Lumberjack natural-forest recon:**
+- Death cause captured from server log: DROWNING during `/spreadplayers` probe (not spawn race, not fall/void)
+- Fix applied + verified: `water_breathing infinite` effect (cause-matched); `fallDamage false` + `/forceload ±48` (pre-emptive)
+- **Harvest: oak_log +14** over 400 steps (perceived 23 log cells, skill histogram HARVEST:396/NAVIGATE:4)
+- OOD finding (reported, not chased): plateau at 14 after ~100 steps (exhausted in-reach logs, didn't roam)
+- Commit: `7a7fbb2`
+
+**Training infrastructure wired:**
+- `--natural-world` flag added to train.py (peaceful=True, arena_bounds_check=False)
+- Boot-test passed (instance-1 connected, MultiAgentEnvRunner up)
+- Commit: `11579c2`
+
+**Phase 2 designs (in progress):**
+- Explorer obs/action/reward/integration contract (D1a, real-MC signal, discrete 8-way bearing, separate MARL agent)
+- Farmer obs/action/reward contract (D2, plant→grow→harvest, temporal/delayed reward, separate role)
+- MARL orchestration plan (Explorer + Lumberjack + Farmer, per-role KL tuning, CTDE critic, joint training)
+
+**Status:** Natural-world validation run dispatched (5 iters on peaceful forest, ~10 min). Phase 2 design agents running parallel. Ready for multi-role training pipeline.
 
 
 
@@ -100,17 +118,21 @@ the formal tag. I can do it once you confirm it's worth the plumbing.
 
 ---
 
-## Recommended priority (my call, you override)
+## Recommended priority (updated post-Phase-1, 2026-05-30)
 
-1. **D3 — Lumberjack in a real survival world.** Attacks the actual end-goal gap
-   (survival realism), reuses the proven policy, unambiguous (does it survive + gather?).
-2. **D2 — Farmer** as the second-role generalization test (delayed-reward mechanic).
-3. **D1 — Explorer** deferred until a real-MC role needs distant search (D1a).
-4. **D4 — promotion** whenever you want the formal M1B tag.
+**Immediate (M2, next 1–2 sessions):**
+1. **Validate Phase 1 & dispatch Phase 2** (in progress):
+   - Validation run: natural-world training 5 iters on peaceful forest (5 min ETA)
+   - If validation passes: Farmer + Explorer can begin Phase 2a (sim testing)
+   - If validation fails: diagnose blocker (script issue vs. real-world variance)
+2. **D1a — Explorer in real-MC natural forests.** Sim Phase 2a (greedy/scripted/trained baselines), Real-MC Phase 2b (70% discovery gate). Bearing production is the hard problem (N23 oracle-follower confirmed).
+3. **D2 — Farmer generalization test.** Plant→grow→harvest, temporal credit assignment. Sim Phase 2a (flat farmland), Real-MC Phase 2b (natural farm spot). Tests learning signal robustness beyond immediate-reward collect tasks.
 
-The common thread: **move off the flat peaceful toy toward survival + real MC**, where
-the end-goal risks (survival, real-resource search, multi-role coordination) actually
-live — rather than refining a sim that keeps rewarding whatever exploits its structure.
+**Deferred (M3+):**
+- **D3 — Persistent survival (tick-warp combat blocker).** Peaceful scope removes combat threat, so D3 is now "persistent gathering + day/night cycles + hunger mechanics" (no mobs = no blocker). Deferrable until multi-role foundation is solid.
+- **D4 — M1B promotion.** Ceremonial; low value/effort.
+
+The common thread: **multi-role foundation (Explorer + Lumberjack + Farmer MARL pipeline) is the unambiguous next step.** All three roles are designed (Phase 1 specs complete); Phase 2 is validation + training. Survival complexity can wait until roles are cooperating.
 
 ## ⭐ The key strategic takeaway (why I did NOT just build more sim roles tonight)
 
