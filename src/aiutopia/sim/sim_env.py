@@ -51,6 +51,7 @@ the gate's "within N env steps" budget semantics.
 
 from __future__ import annotations
 
+import math
 from typing import Any, ClassVar
 
 import numpy as np
@@ -65,6 +66,7 @@ from aiutopia.env.spaces import (
 )
 from aiutopia.sim.obs_adapter import build_gatherer_obs, gatherer_nearest_columns
 from aiutopia.sim.reward_adapter import step_reward
+from aiutopia.sim.scout import FrontierScout
 from aiutopia.sim.skills import apply_skill, mine_instance
 from aiutopia.sim.world import SimWorld
 
@@ -171,6 +173,60 @@ class AiUtopiaSimEnv(ParallelEnv):
             config.get("harvest_perception_mask", self._decision_core)
         )
         self._harvest_mask_off = bool(config.get("harvest_mask_off", False))
+        # Fork-A scout mode (sim-only architecture test) — how g_hostiles_nearby[0]
+        # gets its directional bearing:
+        #   "oracle" (default): the existing ground-truth resource_bearing_cue path
+        #     (unchanged — all prior behaviour/tests untouched).
+        #   "real": a partial-information FrontierScout (sim/scout.py) that knows
+        #     ONLY what the agent has perceived. resource_bearing_cue is FORCED OFF
+        #     in this mode so a None scout bearing can never leak the oracle.
+        #   "off": no bearing (all-zeros), regardless of resource_bearing_cue.
+        self._scout_mode = str(config.get("scout_mode", "oracle"))
+        if self._scout_mode not in ("oracle", "real", "off"):
+            raise ValueError(
+                f"scout_mode must be one of oracle/real/off, got {self._scout_mode!r}"
+            )
+        # One FrontierScout per agent in "real" mode (fresh per episode on reset);
+        # mirrors the _prev_obs / _prev_phi per-agent state pattern.
+        self._scouts: dict[str, FrontierScout] = {}
+
+    def _build_obs(self, agent: str, world: SimWorld) -> dict[str, Any]:
+        """Build the gatherer obs for ``agent``, routing the g_hostiles bearing
+        channel by ``scout_mode``.
+
+        - "oracle": pass the configured resource_bearing_cue, override=None
+          (ground-truth oracle if the cue is on, else zeros — unchanged path).
+        - "real": update the agent's FrontierScout from its CURRENT perception,
+          compute a partial-info bearing, and pass it as bearing_override with
+          resource_bearing_cue FORCED OFF (so a None bearing -> zeros, never the
+          oracle).
+        - "off": cue off, override=None -> all-zeros bearing.
+        """
+        if self._scout_mode == "real":
+            scout = self._scouts[agent]
+            bx = int(math.floor(float(world.agent_pos[0])))
+            bz = int(math.floor(float(world.agent_pos[2])))
+            scout.observe(bx, bz)
+            _col_top, nearby = gatherer_nearest_columns(world)
+            if nearby:
+                # Feed PERCEIVED resource columns (absolute world x,z) — derived
+                # from perception only, never from world.logs ground truth.
+                scout.observe_resources([(int(r[0]), int(r[1])) for r in nearby])
+            bearing = scout.bearing(bx, bz)
+            return build_gatherer_obs(
+                world,
+                harvest_mask_on_perception=self._harvest_perception_mask,
+                resource_bearing_cue=False,
+                harvest_mask_force_valid=self._harvest_mask_off,
+                bearing_override=bearing,
+            )
+        cue = self._resource_bearing_cue if self._scout_mode == "oracle" else False
+        return build_gatherer_obs(
+            world,
+            harvest_mask_on_perception=self._harvest_perception_mask,
+            resource_bearing_cue=cue,
+            harvest_mask_force_valid=self._harvest_mask_off,
+        )
 
     # ───── PettingZoo API ─────
     def observation_space(self, agent: str) -> DictSpace:
@@ -192,12 +248,11 @@ class AiUtopiaSimEnv(ParallelEnv):
         for agent in self.agents:
             world = self.worlds[agent]
             world.reset(int(seed), arena_mode=self._arena_mode)
-            obs[agent] = build_gatherer_obs(
-                world,
-                harvest_mask_on_perception=self._harvest_perception_mask,
-                resource_bearing_cue=self._resource_bearing_cue,
-                harvest_mask_force_valid=self._harvest_mask_off,
-            )
+            # Fresh scout per episode (new exploration memory) before _build_obs,
+            # which reads self._scouts[agent] in "real" mode.
+            if self._scout_mode == "real":
+                self._scouts[agent] = FrontierScout()
+            obs[agent] = self._build_obs(agent, world)
             self._prev_phi[agent] = _log_potential(world)
         self._prev_obs = obs
         infos = {a: {} for a in self.agents}
@@ -263,12 +318,10 @@ class AiUtopiaSimEnv(ParallelEnv):
             world.tick += 1
 
             # 3. Build the post-step obs (byte-faithful gatherer obs adapter).
-            obs_curr = build_gatherer_obs(
-                world,
-                harvest_mask_on_perception=self._harvest_perception_mask,
-                resource_bearing_cue=self._resource_bearing_cue,
-                harvest_mask_force_valid=self._harvest_mask_off,
-            )
+            # In "real" scout mode _build_obs updates the scout from the agent's
+            # CURRENT (post-advance) perception, then computes the partial-info
+            # bearing — so the scout learns from exactly what the agent can now see.
+            obs_curr = self._build_obs(agent, world)
             new_obs[agent] = obs_curr
             obs_prev = self._prev_obs.get(agent, obs_curr)
 

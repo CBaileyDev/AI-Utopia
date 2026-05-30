@@ -147,8 +147,17 @@ def build_gatherer_obs(
     harvest_mask_on_perception: bool = False,
     resource_bearing_cue: bool = False,
     harvest_mask_force_valid: bool = False,
+    bearing_override: tuple[float, float, float] | None = None,
 ) -> dict:
     """Build the gatherer obs dict from SimWorld state, matching the real obs.
+
+    ``bearing_override`` (Fork-A scout): when not None, write g_hostiles_nearby[0]
+    = [override unit_dx, override unit_dz, min(1, dist/64), 1.0] INSTEAD of the
+    oracle computation. This is the channel the partial-information FrontierScout
+    (sim/scout.py) feeds — a directional bearing derived from PERCEIVED state only,
+    NOT ground truth. When None (default), behaviour is EXACTLY as before: the
+    ground-truth oracle if ``resource_bearing_cue`` else all-zeros. No other obs
+    field is touched.
 
     ``resource_bearing_cue`` (M2, sim-only experiment): repurpose g_hostiles_nearby
     row 0 as a UNIT DIRECTION + distance to the nearest alive log — even one BEYOND
@@ -189,7 +198,19 @@ def build_gatherer_obs(
     # [unit dx, unit dz, dist/64, valid] toward the nearest alive log (ground truth,
     # incl. beyond perception). Off -> all zeros (real/golden-trace behavior).
     g_hostiles = np.zeros((4, 4), dtype=np.float32)
-    if resource_bearing_cue:
+    if bearing_override is not None:
+        # Fork-A scout path: a PARTIAL-INFO bearing supplied by the caller
+        # (sim/scout.py) replaces the oracle entirely. Takes precedence over
+        # resource_bearing_cue so a None scout bearing can NOT silently fall
+        # through to the ground-truth oracle.
+        udx, udz, odist = bearing_override
+        g_hostiles[0] = [
+            float(udx),
+            float(udz),
+            min(1.0, float(odist) / 64.0),
+            1.0,
+        ]
+    elif resource_bearing_cue:
         alive = world.log_alive
         if bool(alive.any()):
             d = world.logs[alive].astype(np.float64) - world.agent_pos

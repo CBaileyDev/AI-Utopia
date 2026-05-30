@@ -190,6 +190,43 @@ first experiment is the **FULL recipe**, watching whether entropy actually decay
 return converges — not just whether kl=0 was set. Clean, cheap, sim-only; does NOT
 need the user-gated Java/deploy/promotion.
 
+### ⚡ UPDATE (12h autonomous run, 2026-05-30) — the decisive Fork-A test ran, and found TWO things
+
+Per the advisor's "the whole fork rides on one fact: does a real partial-info scout
+produce good-enough bearings? — settle it with the follower, no training," I built a
+real Level-1 frontier scout (`sim/scout.py` `FrontierScout`: partial-info occupancy +
+WFD + `size/(dist+1)`, structurally cannot read ground truth — 11 tests incl. a
+no-leak discriminator) and ran the scripted follower under 3 bearing sources on 10
+held-out geometries (`scripts/dc_scout_follower.py`):
+
+| bearing source | follower clearance |
+|---|---|
+| oracle (ground-truth dir) | **10/10** (ceiling) |
+| **real frontier scout (partial info)** | **1/10** — wanders (NAV≈192), stuck at cluster A (oak=32) |
+| fixed −z heading (no info) | **10/10** (!!) |
+
+1. **The naive WFD scout FAILS — worse than a fixed heading.** Frontier exploration
+   maximizes *coverage*, not "go toward the resource"; greedy `size/(dist+1)` dithers
+   isotropically and never commits, so it doesn't reach B in budget. → producing
+   good bearings from partial info is genuinely the hard part (the open question), and
+   a Level-1 frontier scout does not solve it.
+2. **The `clusters` arena is DEGENERATE — it never tested omnidirectional search.**
+   Root cause (real bug): `world.py::_cluster_bases` `dirs = [(0,-1),(1,-1),(-1,-1)]`
+   — all three are dz=−1, so cluster B is **always ~22–28 blocks SOUTH** of spawn
+   (only ±x varies). A constant −z heading clears 10/10. The code comment claims
+   "randomized so it isn't always −z" — contradicted by its own list. **This inflates
+   every prior "blind explore" result** (decision-core 5/5, follower 5/5): the task
+   was a fixed southern hop, not a search. Any scout/policy "search" claim on this
+   arena is unfalsifiable because a constant beats it.
+
+**Consequence:** to validate Fork A's producer at all, we need (a) a NON-degenerate
+arena (B uniform in all directions → fixed-heading must fail), and (b) a producer that
+*commits* to systematic coverage (spiral/expanding-ring), not greedy nearest-frontier.
+Both are in progress this run (new `clusters_omni` arena + a committed scout). If even
+a committed scout can't beat fixed-heading on the omni arena, "directed search from
+partial info" needs Level-2+/learning — a real, multi-session research item, honestly
+flagged rather than hidden behind a degenerate arena.
+
 ### Updated recommendation (research + our data now agree)
 Lean **Fork A, staged to B** — strengthened from "weak" to corroborated by external
 consensus *and* consistent with our ablation. Highest-leverage, fully **ungated**
