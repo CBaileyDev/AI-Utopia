@@ -67,9 +67,17 @@ MAX_STEPS = int(os.environ.get("RECON_MAX_STEPS", "600"))
 # Per-step wall cap so a looping policy under attack never hangs for hours.
 WALL_BUDGET_S = float(os.environ.get("RECON_WALL_CAP_S", 45 * 60))
 
-# Survival-pressure commands flipped at runtime AFTER reset.
+# Survival-pressure commands flipped at runtime AFTER each reset. NOTE the
+# `/gamemode survival` line: the Carpet fake player is spawned by
+# `/player <name> spawn` (WorldOps.carpetSpawn) which inherits the server's
+# default (creative/invulnerable) gamemode — so WITHOUT this flip mobs and
+# `/damage` do nothing (the first version of this recon wrongly concluded the
+# player was "invulnerable, untestable without a rebuild"; it was just
+# gamemode). `reset_episode` re-spawns the player, so the flip is re-applied
+# every episode.
 PRESSURE_CMDS = [
-    "/difficulty normal",
+    "/difficulty hard",
+    "/gamemode survival gatherer_0",
     "/gamerule doMobSpawning true",
     "/gamerule doDaylightCycle false",
     "/time set 18000",   # midnight
@@ -196,118 +204,68 @@ def main() -> int:  # noqa: PLR0915, PLR0912
         for cmd in PRESSURE_CMDS:
             _run_command(env, cmd)
 
-        # 4. PRE-FLIGHT: DAMAGEABILITY GATE. The threat-lands check must require
-        #    an actual DECODED-HEALTH DROP — not merely a non-empty
-        #    g_hostiles_nearby (an earlier version's OR over the obs channel let
-        #    a no-damage run pass and produced a bogus "SURVIVED" verdict). We
-        #    (a) summon zombies on the player AND (b) fire a direct `/damage`
-        #    burst, advance ticks, and demand health actually fell. If it does
-        #    not, the fake player is invulnerable under this config and NO
-        #    survival pressure is testable via this path — that is the headline.
+        # 4. DAMAGEABILITY / GRANULARITY FACTS (established by separate probes,
+        #    recorded here for the report; NOT re-run destructively before the
+        #    policy run because every confirmed /damage on this config is
+        #    instantly lethal — see notes):
+        #
+        #    * After `/gamemode survival` the player IS damageable: a separate
+        #      probe drove health 20.0 -> 0.0 with /damage and removed the
+        #      player; 5 zombies summoned on it killed it on the first WAIT step.
+        #    * Health is BINARY at this sampling granularity: the only decoded
+        #      health values ever observed are 20.0 and 0.0. Even `/damage 1`
+        #      goes straight to 0.0 (the fake player behaves as ~1 effective HP
+        #      in survival, or /damage applies lethal force). So there is NO
+        #      graduated health signal to react to.
+        #    * Under tick-warp, one env-step spans many ticks; combat resolves
+        #      BETWEEN obs samples, so the policy gets obs=alive -> picks a skill
+        #      -> the step runs -> next obs = dead. Death is ATOMIC from the
+        #      policy's view; "reaction to declining health/mobs" is structurally
+        #      UNOBSERVABLE on this path.
+        #
+        #    We confirm survival mode took effect (health still readable as 20.0
+        #    after the flip => mode applied, world ticking) and then ARM a
+        #    deterministic threat (one summoned zombie — natural night spawns on
+        #    the lit flat arena are stochastic and unreliable, so we don't rely
+        #    on them) and run the policy, recording the atomic death.
         _p("")
-        _p("[preflight] DAMAGEABILITY GATE: summon zombies + /damage burst, "
-           "require a real decoded-health drop …")
-        wait_action = {
-            "skill_type": np.int64(4),
-            "scalar_param": np.array([0.2, 0.0], dtype=np.float32),
-        }
-        # (a) summon zombies adjacent (relative to player; no abs coords needed).
-        for dx in (-1, 1, 0):
-            _run_command(env, f"/execute at {PLAYER_NAME} run summon minecraft:zombie ~{dx} ~ ~1")
-        pre_h = _decoded_health(obs.get(AGENT_ID, {}))
-        pre_hostiles = _hostiles_present(obs.get(AGENT_ID, {}))
-        _p(f"[preflight] pre decoded health={pre_h} hostiles_in_obs={pre_hostiles}")
-        # advance ticks so zombies path/attack
-        for _ in range(6):
-            if not env.agents:
-                break
-            obs, _r, _t, _tr, _i = env.step(dict.fromkeys(env.agents, wait_action))
-        post_summon_h = _decoded_health(obs.get(AGENT_ID, {}))
-        post_summon_hostiles = _hostiles_present(obs.get(AGENT_ID, {}))
-        _p(f"[preflight] after summon+ticks: health={post_summon_h} "
-           f"hostiles_in_obs={post_summon_hostiles} raw_alive={_raw_alive(env)}")
-        # (b) direct /damage burst — the deterministic damageability test.
-        _run_command(env, f"/damage {PLAYER_NAME} 10")
-        if env.agents:
-            obs, _r, _t, _tr, _i = env.step(dict.fromkeys(env.agents, wait_action))
-        post_dmg_h = _decoded_health(obs.get(AGENT_ID, {}))
-        raw_alive = _raw_alive(env)
-        _p(f"[preflight] after /damage 10 + step: health={post_dmg_h} "
-           f"raw_alive={raw_alive} env.agents={env.agents}")
-
-        # The gate: a real health drop from EITHER mob contact OR /damage, OR the
-        # player was actually removed. Obs-only hostile presence does NOT pass.
-        health_dropped = (
-            (not np.isnan(pre_h) and not np.isnan(post_summon_h)
-             and post_summon_h < pre_h - 0.5)
-            or (not np.isnan(pre_h) and not np.isnan(post_dmg_h)
-                and post_dmg_h < pre_h - 0.5)
-        )
-        post_h = post_dmg_h  # carried into the report
-        post_hostiles = post_summon_hostiles
-        threat_landed = health_dropped or (not raw_alive)
-        if not threat_landed:
-            _p("")
-            _p("[preflight] >>> FAKE PLAYER IS INVULNERABLE <<< Neither 3 "
-               "zombies summoned on top of it (which DID populate "
-               "g_hostiles_nearby) nor a direct `/damage 10` moved decoded "
-               "health off 20.0. Headline finding: under this runtime-flip "
-               "config the Carpet fake player sustains NO net damage, so "
-               "survival via mobs/hunger is NOT testable on this path. "
-               "Recording the null and STOPPING (a 600-step run cannot put "
-               "survival at stake).")
+        baseline_h = _decoded_health(obs.get(AGENT_ID, {}))
+        _p(f"[preflight] survival mode applied; baseline decoded health="
+           f"{baseline_h} (binary 20/0 at this granularity — see notes). "
+           f"raw_alive={_raw_alive(env)}")
+        if np.isnan(baseline_h) or not _raw_alive(env):
+            _p("[preflight] unexpected: agent not alive/readable right after the "
+               "pressure flip — aborting honestly rather than fabricating a run.")
             _write_report(
-                survived=None,
-                cause="FAKE_PLAYER_INVULNERABLE_NO_DAMAGE_LANDS",
+                survived=None, cause="AGENT_NOT_READABLE_AFTER_PRESSURE_FLIP",
                 steps_to_death=None,
-                preflight={
-                    "pre_h": pre_h, "post_summon_h": post_summon_h,
-                    "post_damage_h": post_dmg_h,
-                    "pre_hostiles": pre_hostiles,
-                    "post_summon_hostiles": post_summon_hostiles,
-                    "raw_alive": raw_alive,
-                    "death_oracle_validated_separately": True,
-                },
-                trace=[],
-                reacted=None,
-                logs_at_end=_oak_log(obs.get(AGENT_ID, {})),
-                hostiles_ever=post_summon_hostiles > 0,
-                notes=("Summoned zombies populated g_hostiles_nearby (the obs "
-                       "channel works with real mobs) but did zero damage; a "
-                       "direct /damage burst also did nothing. The death oracle "
-                       "(raw-key absence) was validated in a separate probe via "
-                       "/kill, which DID remove the player (health->0, key gone), "
-                       "so the oracle is sound — the player is simply invulnerable "
-                       "to non-/kill damage in this config."),
+                preflight={"baseline_h": baseline_h, "raw_alive": _raw_alive(env)},
+                trace=[], reacted=None, logs_at_end=0, hostiles_ever=False,
+                notes="Agent was not alive/readable immediately after the "
+                      "survival-pressure flip; no run performed.",
             )
             return 0
 
-        _p("[preflight] threat landed (real health drop or player removed). "
-           "Proceeding to the greedy-policy run.")
+        # ARM the threat: one zombie a few blocks from the player. Deterministic
+        # (not relying on stochastic natural spawns). g_hostiles_nearby was
+        # separately confirmed to populate with real summoned mobs.
+        _p("[preflight] arming deterministic threat: 1 zombie ~4 blocks away …")
+        _run_command(env, f"/execute at {PLAYER_NAME} run summon minecraft:zombie ~4 ~ ~")
 
-        # 5. GREEDY-POLICY RUN under pressure. We do NOT re-reset (that would
-        #    clear the summoned mobs and reset survival state); we continue from
-        #    the post-preflight world, re-initialising the LSTM state. Natural
-        #    night spawns (doMobSpawning true + midnight) keep adding pressure.
+        # 5. GREEDY-POLICY RUN under pressure. We continue from the post-reset
+        #    world (survival mode + armed threat), freshly initialising the LSTM
+        #    state, and run the proven greedy policy. The capture records pre-step
+        #    hostiles/health/pos so a terminal step's cause rests on what was in
+        #    obs the step it died — not a run-wide flag.
         _p("")
-        _p(f"[run] running greedy policy up to {MAX_STEPS} steps under pressure …")
-        if not env.agents:
-            _p("[run] agent already removed after pre-flight (died during "
-               "summon test). Recording death-in-preflight.")
-            _write_report(
-                survived=False, cause="MOB_ATTACK_DURING_PREFLIGHT",
-                steps_to_death=0,
-                preflight={"pre_h": pre_h, "post_h": post_h,
-                           "pre_hostiles": pre_hostiles, "post_hostiles": post_hostiles,
-                           "raw_alive": raw_alive},
-                trace=[], reacted=None,
-                logs_at_end=_oak_log(obs.get(AGENT_ID, {})),
-                hostiles_ever=post_hostiles > 0,
-                notes="Fake player died during the pre-flight summon before the "
-                      "policy run began. Threat lethality confirmed; policy "
-                      "reaction not observed.",
-            )
-            return 0
+        _p(f"[run] running greedy policy up to {MAX_STEPS} steps under survival "
+           f"pressure (death expected to be atomic) …")
+        preflight_record = {
+            "baseline_h": baseline_h,
+            "health_is_binary_20_or_0": True,
+            "armed_threat": "1 zombie summoned ~4 blocks away",
+            "death_atomic_under_tickwarp": True,
+        }
 
         states = {
             a: {k: v for k, v in module.get_initial_state().items()} for a in env.agents
@@ -318,7 +276,7 @@ def main() -> int:  # noqa: PLR0915, PLR0912
         cause = "SURVIVED"
         steps_to_death = None
         survived = True
-        hostiles_ever = post_hostiles > 0
+        hostiles_ever = False
         capped = None
 
         for step_i in range(1, MAX_STEPS + 1):
@@ -349,7 +307,11 @@ def main() -> int:  # noqa: PLR0915, PLR0912
                     step_skill = int(action["skill_type"])
                 states[aid] = {k: v.squeeze(0) for k, v in out[Columns.STATE_OUT].items()}
 
-            pre_h = _decoded_health(obs.get(AGENT_ID, {}))
+            # Capture PRE-step obs (the obs the policy actually decided on, and
+            # the obs that still carries hostiles on the step it dies — the
+            # post-step obs is zero-filled once the player is removed).
+            pre_obs = obs.get(AGENT_ID, {})
+            pre_host = _hostiles_present(pre_obs)
 
             obs, _rew, term, trunc, _info = env.step(actions)
 
@@ -360,7 +322,7 @@ def main() -> int:  # noqa: PLR0915, PLR0912
             n_host = _hostiles_present(ag_obs)
             pos = _decoded_pos(ag_obs)
             raw_alive = _raw_alive(env)
-            hostiles_ever = hostiles_ever or n_host > 0
+            hostiles_ever = hostiles_ever or n_host > 0 or pre_host > 0
             agent_term = bool(term.get(AGENT_ID, False))
             agent_trunc = bool(trunc.get(AGENT_ID, False))
 
@@ -370,6 +332,7 @@ def main() -> int:  # noqa: PLR0915, PLR0912
                 "health": round(post_h, 2) if not np.isnan(post_h) else None,
                 "hunger": round(post_hu, 2) if not np.isnan(post_hu) else None,
                 "hostiles": n_host,
+                "pre_hostiles": pre_host,
                 "oak_log": post_logs,
                 "pos": pos,
                 "raw_alive": raw_alive,
@@ -379,7 +342,9 @@ def main() -> int:  # noqa: PLR0915, PLR0912
             })
 
             # Death oracle: raw-key absence is ground truth (player removed on
-            # death). Corroborate with decoded-health-to-0 and term flag.
+            # death). Corroborate with decoded-health-to-0 and term flag. Cause
+            # attribution rests on PRE-step hostiles (what was in obs the step it
+            # died) since the post-step obs is zero-filled after removal.
             if (not raw_alive) or agent_term or (AGENT_ID not in env.agents):
                 survived = False
                 steps_to_death = step_i
@@ -387,12 +352,15 @@ def main() -> int:  # noqa: PLR0915, PLR0912
                     cause = "OUT_OF_BOUNDS_TRUNCATION"
                     survived = True  # not a death — fled the arena
                     steps_to_death = None
-                elif n_host > 0 or hostiles_ever:
+                elif pre_host > 0:
                     cause = "MOB_ATTACK"
+                elif hostiles_ever:
+                    cause = "MOB_ATTACK_LIKELY (hostiles seen earlier, none in pre-step obs)"
                 else:
                     cause = "DEATH_CAUSE_UNKNOWN_NO_HOSTILES_IN_OBS"
                 _p(f"[run] terminal at step {step_i}: raw_alive={raw_alive} "
-                   f"term={agent_term} trunc={agent_trunc} -> cause={cause}")
+                   f"term={agent_term} trunc={agent_trunc} pre_step_hostiles={pre_host} "
+                   f"skill_chosen={SKILL_NAMES.get(step_skill, '?')} -> cause={cause}")
                 break
 
             if agent_trunc:
@@ -420,8 +388,7 @@ def main() -> int:  # noqa: PLR0915, PLR0912
             survived=survived,
             cause=cause,
             steps_to_death=steps_to_death,
-            preflight={"pre_h": pre_h, "post_h": post_h,
-                       "post_hostiles": post_hostiles, "raw_alive": True},
+            preflight=preflight_record,
             trace=trace,
             reacted=reacted,
             logs_at_end=trace[-1]["oak_log"] if trace else 0,
@@ -532,10 +499,11 @@ def _write_report(*, survived, cause, steps_to_death, preflight, trace, reacted,
     for c in PRESSURE_CMDS:
         a(f"- `{c}`")
     a("")
-    a("Plus a deterministic pre-flight that `/summon`s zombies adjacent to the "
-      "fake player to confirm the threat actually lands before committing to a "
-      "long run (natural night spawns are stochastic; on `/difficulty normal` "
-      "starvation caps at 1 HP and never kills, so a kill requires mob damage).")
+    a("Survival is enabled by `/gamemode survival` at runtime (the Carpet fake "
+      "player otherwise spawns invulnerable). A deterministic summoned zombie "
+      "arms the threat rather than relying on stochastic natural night spawns. "
+      "See the analyst addendum for the corrected damageability/granularity "
+      "findings.")
     a("")
     a("The policy is OUT-OF-DISTRIBUTION on every survival signal: it was "
       "trained at constant `health=20`, `hunger=20`, empty `g_hostiles_nearby`.")
@@ -593,14 +561,13 @@ def _write_report(*, survived, cause, steps_to_death, preflight, trace, reacted,
     a("- This is a single seeded run (seed=1) on one instance. Minecraft mob "
       "spawning/pathing has stochastic elements; treat counts as one sample, "
       "not a distribution.")
-    a("- 'Reacted to hostiles' is a weak observational signal (dominant-skill "
-      "shift between hostile/non-hostile steps), NOT proof of intent. The "
-      "policy never saw a non-empty `g_hostiles_nearby` in training, so any "
-      "apparent reaction is most likely incidental.")
-    a("- Pressure was flipped at runtime mid-world, not baked into the arena "
-      "generation; the arena remains the flat M1B ring.")
-    a("- 'Cause = MOB_ATTACK' is inferred from hostiles being present in obs "
-      "around the terminal step, not from a death-message parse.")
+    a("- Pressure was flipped at runtime mid-world (no Java rebuild); the arena "
+      "remains the flat M1B ring.")
+    a("- `cause = MOB_ATTACK` is inferred from hostiles being present in the "
+      "PRE-step obs of the terminal step, not from a death-message parse.")
+    a("- `reacted to hostiles` cannot be cleanly measured here: under tick-warp "
+      "death is atomic (one step alive, next step dead), so there is no "
+      "alive-with-hostiles decision step to compare. See addendum Finding 4.")
     a("")
 
     with open(out_path, "w", encoding="utf-8") as f:

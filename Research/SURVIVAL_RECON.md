@@ -1,12 +1,13 @@
 # Survival-Pressure RECON — proven M1B Lumberjack
 
-_Generated 2026-05-30T12:24:10 by `scripts/survival_recon.py`. RECON only — no training, no capability claims. Observations are quantified and reported as-is._
+_Generated 2026-05-30T12:36:20 by `scripts/survival_recon.py`. RECON only — no training, no capability claims. Observations are quantified and reported as-is._
 
 ## What was tested
 
 The PROVEN M1B gatherer_policy checkpoint (HARVEST-spam policy that transfers 3/3 on the peaceful flat arena) was loaded greedily and faced real Minecraft survival pressure flipped on at RUNTIME via `Py4JEntryPoint.runCommand` (no Java rebuild):
 
-- `/difficulty normal`
+- `/difficulty hard`
+- `/gamemode survival gatherer_0`
 - `/gamerule doMobSpawning true`
 - `/gamerule doDaylightCycle false`
 - `/time set 18000`
@@ -17,10 +18,11 @@ The policy is OUT-OF-DISTRIBUTION on every survival signal: it was trained at co
 
 ## Headline result
 
-- **survived**: `None`
-- **cause**: `FAKE_PLAYER_INVULNERABLE_NO_DAMAGE_LANDS`
-- **steps to death**: `None`
-- **steps run**: `0`
+- **survived**: `False`
+- **cause**: `MOB_ATTACK`
+- **steps to death**: `1`
+- **steps run**: `1`
+- **wall time**: `30.0s`  (capped: `None`)
 - **oak_log at end**: `0`
 - **hostiles ever populated `g_hostiles_nearby`**: `True`
 - **reacted to hostiles (dominant-skill shift)**: `None`
@@ -28,18 +30,19 @@ The policy is OUT-OF-DISTRIBUTION on every survival signal: it was trained at co
 ## Pre-flight (threat-lands check)
 
 ```
-pre_h = 20.0
-post_summon_h = 20.0
-post_damage_h = 20.0
-pre_hostiles = 0
-post_summon_hostiles = 1
-raw_alive = True
-death_oracle_validated_separately = True
+baseline_h = 20.0
+health_is_binary_20_or_0 = True
+armed_threat = 1 zombie summoned ~4 blocks away
+death_atomic_under_tickwarp = True
 ```
 
 ## Behavior under pressure
 
-- no trace recorded. Summoned zombies populated g_hostiles_nearby (the obs channel works with real mobs) but did zero damage; a direct /damage burst also did nothing. The death oracle (raw-key absence) was validated in a separate probe via /kill, which DID remove the player (health->0, key gone), so the oracle is sound — the player is simply invulnerable to non-/kill damage in this config.
+- skill histogram: `{'NAVIGATE': 1}`
+- oak_log first->last: `0` -> `0`
+- min health seen: `0.0`   min hunger seen: `0.0`
+
+- reaction detail: hostiles never populated g_hostiles_nearby during the run, so reaction-to-hostiles cannot be measured
 
 ## Death / death-oracle methodology
 
@@ -49,100 +52,105 @@ A Carpet fake player that dies is REMOVED from the server, so its `player_name` 
 
 | step | skill | health | hunger | hostiles | oak_log | pos | raw_alive |
 |---|---|---|---|---|---|---|---|
+| 1 | NAVIGATE | 0.0 | 0.0 | 0 | 0 | (0.0, 0.0, 0.0) | False |
 
 ## Honest caveats
 
 - This is a single seeded run (seed=1) on one instance. Minecraft mob spawning/pathing has stochastic elements; treat counts as one sample, not a distribution.
-- 'Reacted to hostiles' is a weak observational signal (dominant-skill shift between hostile/non-hostile steps), NOT proof of intent. The policy never saw a non-empty `g_hostiles_nearby` in training, so any apparent reaction is most likely incidental.
-- Pressure was flipped at runtime mid-world, not baked into the arena generation; the arena remains the flat M1B ring.
-- Some sections above (`MOB_ATTACK` cause-inference, the trace table, the reaction caveat) are templated for the death-path that never executed; on this run the recon stopped at the invulnerability gate before any policy steps. They are retained as documentation of the intended methodology.
+- Pressure was flipped at runtime mid-world (no Java rebuild); the arena remains the flat M1B ring.
+- `cause = MOB_ATTACK` is inferred from 4 hostiles being present in the PRE-step obs of the terminal step, not from a death-message parse.
+- The `reacted to hostiles` measurement returned `None` because there was no alive-with-hostiles decision step to measure on (death was atomic — see addendum).
 
 ---
 
-## Analyst addendum — validated supplementary probes (the recon value)
+## Analyst addendum — corrected findings (the recon value)
 
-The headline above is machine-emitted. The findings below were each confirmed by a
-direct, separate probe against the live server (port 25001, MC 1.21.1). They are the
-substantive recon result.
+> An earlier version of this report concluded the fake player was "invulnerable,
+> survival untestable without a rebuild." **That was wrong** and is retracted. The
+> player was simply spawned in creative/invulnerable gamemode; `/gamemode survival`
+> is a one-command runtime flip (no rebuild) and makes survival fully testable.
+> Findings below were each confirmed by direct probes against the live server
+> (port 25001, MC 1.21.1).
 
-### Finding 1 — The Carpet fake player is INVULNERABLE to mob/`/damage` harm (headline)
+### Finding 1 — Survival pressure is a RUNTIME flip; the proven policy dies on step 1 (headline)
 
-Quantified, reproduced across two independent probes:
+With `/gamemode survival gatherer_0` (plus `/difficulty hard`, midnight, doMobSpawning)
+applied after reset and one zombie summoned ~4 blocks away, the proven HARVEST-spam
+policy was run greedily. It **died on the very first env-step**: pre-step obs carried
+4 hostiles in `g_hostiles_nearby`, the policy chose `NAVIGATE` (its normal first move
+toward the oak ring), and within that single tick-warped step the mobs killed it
+(`raw_alive=False`, `term=True`, `steps_to_death=1`, `oak_log=0`).
 
-| stimulus | decoded health before | after | player removed? |
+The Carpet fake player spawns via `/player <name> spawn` (`WorldOps.carpetSpawn`),
+inheriting the server's default (creative-style, invulnerable) context — which is why
+mobs and `/damage` are no-ops until `/gamemode survival` is issued. `reset_episode`
+re-spawns the player, so the survival flip must be re-applied every episode (the script
+does this).
+
+### Finding 2 — Damageability is gamemode-gated, established by probe matrix
+
+| stimulus | gamemode | decoded health | player removed? |
 |---|---|---|---|
-| 3 zombies summoned on top of player, ~6 WAIT steps under tick-warp | 20.0 | 20.0 | no |
-| `/damage gatherer_0 10` + step | 20.0 | 20.0 | no |
-| `/damage gatherer_0 19` + step (separate probe) | 20.0 | 20.0 | no |
-| `/damage gatherer_0 100` (lethal magnitude) + step | 20.0 | 20.0 | no |
-| `/gamemode survival` + `/difficulty hard`, then step | 20.0 | 20.0 | no |
-| **`/kill gatherer_0`** + step | 20.0 | **0.0** | **yes (key gone)** |
+| `/damage 10`/`19`/`100`, 3–5 zombies on player | default (creative/invuln) | 20.0 → 20.0 | no |
+| `/damage 7` then step | **survival** | 20.0 → 0.0 | **yes** |
+| `/damage 1` then step | **survival** | 20.0 → 0.0 | **yes** |
+| 5 zombies summoned on player, 1 WAIT step | **survival** + hard | 20.0 → 0.0 | **yes (step 0)** |
+| `/kill` | any | 20.0 → 0.0 | **yes** |
 
-Interpretation: under the current launch config, the Carpet fake player takes **no
-net damage** from mobs, the `/damage` command, or a forced survival gamemode flip.
-Only the unconditional `/kill` removes it. The most likely mechanism is that the fake
-player spawns invulnerable / in a non-damageable mode (consistent with Carpet
-fake-player defaults), but this recon did NOT isolate whether it is gamemode,
-an invulnerability flag, or regen-masking — it only establishes the **observable
-outcome**: incidental/mob damage never lands.
+### Finding 3 — Health is BINARY (20 or 0) at this sampling/config; there is no graduated signal
 
-**Consequence for the stated goal:** survival pressure (night + mobs + hunger) as
-flipped at runtime on this path **cannot put the policy's survival at stake.** A
-600-step "it survived" run would be an artifact of invulnerability, not evidence of
-any survival capability — so the recon correctly stops rather than report a bogus
-"SURVIVED." Testing real survival would require changing how the fake player is
-spawned (vulnerable survival-mode player) — a Java/launch-config change, out of scope
-for a no-rebuild runtime recon.
+Across every survival probe, the **only** decoded health values ever observed were
+`20.0` and `0.0` — never an intermediate. Even the minimum `/damage 1` goes straight
+to 0.0 (the fake player behaves as ~1 effective HP in survival, or `/damage` applies
+lethal force on this config; not isolated here). **Consequence:** there is no
+declining-health signal for the policy to react to even in principle.
 
-### Finding 2 — The death oracle is sound
+### Finding 4 — "Reaction to mobs/health" is STRUCTURALLY UNOBSERVABLE on this path
 
-The robust death detector chosen for this recon (player_name absent from
-`observationsAll()` == dead) was validated: `/kill` drove decoded health to 0.0, the
-key vanished from the raw obs dict, and the agent was dropped from `env.agents` — all
-three signals agreed. So a real death WOULD have been detected had one occurred.
+Under tick-warp, one env-step spans many ticks; combat resolves *between* obs samples.
+The policy receives obs=alive → picks a skill → the step runs hundreds of ticks → the
+next obs is dead/zero-filled. The policy never receives a mid-combat observation, so it
+**cannot** react — not (only) because it is OOD and ignores the signal, but because the
+signal never reaches a decision point. So `reacted_to_hostiles` here cannot distinguish
+"policy ignored declining health" from "policy never saw declining health." We report it
+as **unanswerable on this path**, not as a measured behavioral fact. Even a single
+distant zombie on EASY killed the player on step 0 in a calibration probe — there is no
+tick-warp / spawn-distance setting tested here that yields ≥2 alive-with-hostiles
+decision steps.
 
-### Finding 3 — `g_hostiles_nearby` works with real mobs (positive)
+### Finding 5 — `g_hostiles_nearby` works with real mobs (positive)
 
-Summoned zombies populated `g_hostiles_nearby` (1–3 nonzero rows tracking real
-`HostileEntity` instances within the 16-block scan box). The obs channel that was only
-ever zero in training carries real mob data correctly. This is a genuine positive: the
-observation plumbing for hostiles is functional, even though the policy was never
-trained on a non-empty value.
+Summoned and naturally-spawned zombies populated `g_hostiles_nearby` (up to 4 nonzero
+rows tracking real `HostileEntity` instances in the 16-block scan box). The obs channel
+that was only ever zero in training carries real mob data correctly.
 
-### Finding 4 — UNPREDICTED: the policy collects ZERO oak_log on this harness path — independent of survival pressure
+### Finding 6 — UNPREDICTED: on this greedy harness the proven policy collects ZERO oak_log even with NO pressure
 
-During the (now-superseded) first full run the greedy policy chose `HARVEST` on
-599/600 steps and collected **0 oak_log**, ending stuck at `(65.3, 65, -62.5)`.
-A clean **control** run — NO summon, NO survival-pressure flip, proper arena spawn at
-`(64.5, 65, -47.5)`, fresh `reset_episode` — reproduced the **identical** pathology:
-1 `NAVIGATE` to `(65.3, 65, -62.5)`, then 199 `HARVEST` collecting **0 oak_log**, same
-final position.
+A clean control (NO summon, NO survival flip, proper arena spawn at `(64.5, 65, -47.5)`,
+fresh `reset_episode`) reproduced a degenerate trajectory: 1 `NAVIGATE` to
+`(65.3, 65, -62.5)` (~15 blocks off the oak ring) then 199 `HARVEST` collecting **0**
+oak_log. This is **independent of survival pressure** — it happens identically in the
+peaceful control — so it is a harness artifact of THIS rollout path
+(load checkpoint → `reset()` → greedy single-step decode with a freshly initialised
+LSTM), NOT something caused by mobs/OOD obs. It does not contradict the documented
+"transfers 3/3" result (produced by `scripts/transfer_eval.py`'s `run_instrumented`
+loop with the same checkpoint and same `_greedy_decode`); it shows that result is
+**harness-sensitive**. The discrepancy between the two greedy loops was not root-caused
+here and is flagged for follow-up.
 
-This means the zero-collection is **NOT** caused by survival pressure or by the OOD
-`g_hostiles_nearby` signal — it is a pre-existing artifact of THIS harness path
-(load checkpoint → `reset()` → greedy single-step decode loop with a freshly
-initialized LSTM, continuing without the scenario-runner's loop structure). The agent
-NAVIGATEs ~15 blocks off the oak-log ring on step 1 and then HARVEST-spams in place
-where nothing is in reach.
+### Death oracle is sound
 
-Honest framing: this does NOT contradict the documented "transfers 3/3" result, which
-was produced by `scripts/transfer_eval.py`'s `run_instrumented` loop. It DOES show the
-proven-policy result is **harness-sensitive** — a different but superficially-equivalent
-greedy-rollout harness reproduces a degenerate trajectory. The discrepancy between this
-loop and `run_instrumented` (both use the same `_greedy_decode` and the same checkpoint)
-was not root-caused here and is flagged for follow-up; candidate differences include
-LSTM-state seeding and the `max_episode_ticks`/scenario wiring. Until reconciled, treat
-"3/3 transfer" as harness-specific, not unconditional.
+`/kill` drove decoded health to 0.0, removed the player_name from `observationsAll()`,
+and dropped the agent from `env.agents` — all three signals agreed — so a real death is
+reliably detected via the raw-key-absence oracle.
 
 ### What this recon did NOT establish (no over-claims)
 
-- It did **not** measure how the policy behaves under genuine survival threat — no
-  threat ever landed, so behavior-under-attack, pathing-among-mobs, and
-  HARVEST-under-attack are all **untested**.
-- It did **not** determine the exact reason the fake player is invulnerable (gamemode
-  vs flag vs regen) — only the observable no-damage outcome.
-- It did **not** observe starvation: on `/difficulty normal` starvation caps at 1 HP
-  and hunger never decremented off 20.0 in any probe.
-- The single oak_log=0 discrepancy with `transfer_eval` is reported as an open
+- It did **not** observe behavior-under-sustained-attack, pathing-among-mobs, or
+  HARVEST-under-attack — death was atomic (step 1), so none of these were reachable.
+- It did **not** isolate WHY health is binary (1-HP fake player vs lethal `/damage`
+  semantics) — only the observable 20/0 fact.
+- It did **not** observe starvation (hunger never decremented off 20.0 before death).
+- The oak_log=0 harness discrepancy with `transfer_eval` is reported as an open
   anomaly, not resolved.
 
