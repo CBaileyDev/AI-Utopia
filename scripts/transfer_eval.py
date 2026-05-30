@@ -44,16 +44,41 @@ import numpy as np
 # .from_checkpoint feeds the path to pyarrow.fs.FileSystem.from_uri, which
 # rejects a relative path ("URI has empty scheme") — must be absolute.
 _REPO = Path(__file__).resolve().parent.parent
-# Auto-resolve the NEWEST sim-trained checkpoint's gatherer_policy module (so a
-# re-train after a fidelity fix is picked up without editing this path).
-_SIM_CKPTS = sorted(
-    (_REPO / "runs" / "aiutopia_M1_seed1").glob("PPO_aiutopia_sim_*/checkpoint_*"),
-    key=lambda p: p.stat().st_mtime,
-)
-if not _SIM_CKPTS:
-    raise FileNotFoundError("no PPO_aiutopia_sim checkpoint under runs/aiutopia_M1_seed1")
+# Checkpoint selection. TRANSFER_CKPT (a checkpoint_* dir) overrides explicitly.
+# Otherwise auto-resolve the newest NON-decision-core checkpoint: the M1B gate is
+# the proven HARVEST-spam policy, but the N22 decision-core experiments
+# (params.json decision_core=true) are NEWER and do NOT clear the bare M1B arena —
+# blindly picking "newest" silently evaluated the wrong policy (0/3 + SIM control
+# 0/64). Skip decision_core runs so the default stays the proven M1B checkpoint.
+def _is_decision_core(run_dir: Path) -> bool:
+    try:
+        return '"decision_core": true' in (run_dir / "params.json").read_text()
+    except OSError:
+        return False
+
+
+_override = os.environ.get("TRANSFER_CKPT")
+if _override:
+    _chosen = Path(_override)
+else:
+    _SIM_CKPTS = sorted(
+        (
+            c
+            for c in (_REPO / "runs" / "aiutopia_M1_seed1").glob(
+                "PPO_aiutopia_sim_*/checkpoint_*"
+            )
+            if not _is_decision_core(c.parent)
+        ),
+        key=lambda p: p.stat().st_mtime,
+    )
+    if not _SIM_CKPTS:
+        raise FileNotFoundError(
+            "no NON-decision-core PPO_aiutopia_sim checkpoint under "
+            "runs/aiutopia_M1_seed1 (set TRANSFER_CKPT to override)"
+        )
+    _chosen = _SIM_CKPTS[-1]
 GATHERER_MODULE_DIR = (
-    _SIM_CKPTS[-1] / "learner_group" / "learner" / "rl_module" / "gatherer_policy"
+    _chosen / "learner_group" / "learner" / "rl_module" / "gatherer_policy"
 ).resolve()
 
 # Skill index -> name (spaces.py: N_GATHERER_SKILLS=6, agent.py docstring).
@@ -89,7 +114,7 @@ def load_gatherer_module():
     _p(f"[load] RLModule.from_checkpoint({GATHERER_MODULE_DIR})")
     try:
         module = RLModule.from_checkpoint(GATHERER_MODULE_DIR)
-    except Exception as exc:  # noqa: BLE001 — fall back to MultiRLModule subdir
+    except Exception as exc:
         _p(f"[load] single-module load failed ({type(exc).__name__}: {exc});"
            f" falling back to MultiRLModule.from_checkpoint")
         from ray.rllib.core.rl_module.multi_rl_module import MultiRLModule
@@ -115,7 +140,7 @@ def verify_not_random(trained) -> None:
     import torch
     from ray.rllib.core import Columns
 
-    from aiutopia.env.spaces import build_role_observation_space, build_role_action_space
+    from aiutopia.env.spaces import build_role_action_space, build_role_observation_space
     from aiutopia.rl_module.role_rl_module import AiUtopiaRoleRLModule
 
     obs_space = build_role_observation_space("gatherer", stage=1)
