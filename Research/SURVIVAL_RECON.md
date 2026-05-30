@@ -72,14 +72,21 @@ A Carpet fake player that dies is REMOVED from the server, so its `player_name` 
 > Findings below were each confirmed by direct probes against the live server
 > (port 25001, MC 1.21.1).
 
-### Finding 1 — Survival pressure is a RUNTIME flip; the proven policy dies on step 1 (headline)
+### Finding 1 — Survival pressure is a RUNTIME flip; the proven policy dies on step 1 to the mob (headline)
 
 With `/gamemode survival gatherer_0` (plus `/difficulty hard`, midnight, doMobSpawning)
 applied after reset and one zombie summoned ~4 blocks away, the proven HARVEST-spam
 policy was run greedily. It **died on the very first env-step**: pre-step obs carried
 4 hostiles in `g_hostiles_nearby`, the policy chose `NAVIGATE` (its normal first move
-toward the oak ring), and within that single tick-warped step the mobs killed it
-(`raw_alive=False`, `term=True`, `steps_to_death=1`, `oak_log=0`).
+toward the oak ring), and within that single tick-warped step (~400 ticks ≈ 20 game-
+seconds) the mobs killed it (`raw_alive=False`, `term=True`, `steps_to_death=1`,
+`oak_log=0`). The `term AND trunc` both-true on the terminal step is a side effect of
+removal (the zero-filled position reads as out-of-bounds); `raw_alive=False` is the
+authoritative death signal.
+
+**The mob is genuinely the cause** — isolated by control (see Finding 2b): the SAME seed
+and SAME first NAVIGATE in survival mode with NO mob survived 60 steps at full health.
+The only thing that changed in the lethal run was the threat.
 
 The Carpet fake player spawns via `/player <name> spawn` (`WorldOps.carpetSpawn`),
 inheriting the server's default (creative-style, invulnerable) context — which is why
@@ -94,29 +101,46 @@ does this).
 | `/damage 10`/`19`/`100`, 3–5 zombies on player | default (creative/invuln) | 20.0 → 20.0 | no |
 | `/damage 7` then step | **survival** | 20.0 → 0.0 | **yes** |
 | `/damage 1` then step | **survival** | 20.0 → 0.0 | **yes** |
-| 5 zombies summoned on player, 1 WAIT step | **survival** + hard | 20.0 → 0.0 | **yes (step 0)** |
 | `/kill` | any | 20.0 → 0.0 | **yes** |
 
-### Finding 3 — Health is BINARY (20 or 0) at this sampling/config; there is no graduated signal
+Note the `/damage <n>` rows: even `/damage 1` instantly removed the player, which is
+anomalous for a 20-HP entity. This appears to be a `/damage`-COMMAND artifact on Carpet
+fake players (the command over-applies / instant-kills), **not** evidence of low HP —
+`getHealth()` reports the full 20.0 (see Finding 3). The `/damage` quirk was flagged,
+not root-caused; it is irrelevant to mob-driven death, which works normally (Findings 1,
+2b).
 
-Across every survival probe, the **only** decoded health values ever observed were
-`20.0` and `0.0` — never an intermediate. Even the minimum `/damage 1` goes straight
-to 0.0 (the fake player behaves as ~1 effective HP in survival, or `/damage` applies
-lethal force on this config; not isolated here). **Consequence:** there is no
-declining-health signal for the policy to react to even in principle.
+### Finding 2b — POSITIVE control: survival + NO threat → policy runs normally, 60 steps, full health
 
-### Finding 4 — "Reaction to mobs/health" is STRUCTURALLY UNOBSERVABLE on this path
+`/gamemode survival` + `/difficulty hard` + `doMobSpawning false` + daytime, NO mob, then
+the proven greedy policy for 60 steps: it **survived all 60 steps at health=20.0**
+(4 NAVIGATE + 56 HARVEST, no death, no truncation). This is the load-bearing control: it
+(a) proves survival mode by itself does NOT kill the player (so the armed run's death is
+the mob, not survival/fragility), and (b) shows baseline survival works. It still
+collected 0 oak_log — consistent with the harness artifact in Finding 6.
+
+### Finding 3 — Health was only ever SAMPLED as 20.0 or 0.0 (a sampling artifact, not low HP)
+
+Across every probe, the only decoded health values observed were `20.0` and `0.0` —
+never an intermediate. This is a **sampling artifact**, not a property of the player: the
+obs reports `agent.getHealth()` with max 20 (`CoreObsBuilder.vec1(agent.getHealth())`),
+and the no-threat control held a steady 20.0 for 60 steps, so the player genuinely has
+20 HP. The reasons no intermediate value was ever sampled are (a) the `/damage`-command
+quirk (one-shots regardless of `<n>`) and (b) mob death resolving inside a single
+~400-tick warped env-step. We do NOT claim health is inherently binary or that the player
+has ~1 HP.
+
+### Finding 4 — In the ARMED config, mob death is atomic from the policy's view; reaction was not measurable here
 
 Under tick-warp, one env-step spans many ticks; combat resolves *between* obs samples.
-The policy receives obs=alive → picks a skill → the step runs hundreds of ticks → the
-next obs is dead/zero-filled. The policy never receives a mid-combat observation, so it
-**cannot** react — not (only) because it is OOD and ignores the signal, but because the
-signal never reaches a decision point. So `reacted_to_hostiles` here cannot distinguish
-"policy ignored declining health" from "policy never saw declining health." We report it
-as **unanswerable on this path**, not as a measured behavioral fact. Even a single
-distant zombie on EASY killed the player on step 0 in a calibration probe — there is no
-tick-warp / spawn-distance setting tested here that yields ≥2 alive-with-hostiles
-decision steps.
+In the armed run the policy received obs=alive → picked `NAVIGATE` → the ~400-tick step
+ran → the next obs was dead/zero-filled. So for THIS config (4 mobs, adjacent, hard,
+tick-warp) the policy never received a mid-combat observation and `reacted_to_hostiles`
+is **not measurable** — we cannot distinguish "ignored the signal" (OOD) from "never saw
+a mid-combat signal." We did NOT establish that a gentler config (distant mob, lower warp,
+fewer mobs) could not yield alive-with-hostiles decision steps; that was not found here
+but is not ruled out. So this is a per-config observation, not a structural impossibility
+claim.
 
 ### Finding 5 — `g_hostiles_nearby` works with real mobs (positive)
 
@@ -144,13 +168,25 @@ here and is flagged for follow-up.
 and dropped the agent from `env.agents` — all three signals agreed — so a real death is
 reliably detected via the raw-key-absence oracle.
 
+### Finding 7 — n=1 datapoint: the policy's first action was IDENTICAL with and without the threat
+
+At step 1 the greedy policy chose `NAVIGATE` in BOTH the armed run (obs carried 4
+hostiles + night) and the no-mob control (no hostiles, daytime) — the same immediate
+action despite the survival signal being present in one and absent in the other. This is
+a cleaner "did not alter its immediate action under the survival signal" datapoint than
+the dominant-skill histogram (which returned None). Heavy caveats: n=1, greedy decode,
+and the two obs differed in more than just hostiles (time-of-day too), so this is
+suggestive, not a measured reaction result.
+
 ### What this recon did NOT establish (no over-claims)
 
 - It did **not** observe behavior-under-sustained-attack, pathing-among-mobs, or
-  HARVEST-under-attack — death was atomic (step 1), so none of these were reachable.
-- It did **not** isolate WHY health is binary (1-HP fake player vs lethal `/damage`
-  semantics) — only the observable 20/0 fact.
-- It did **not** observe starvation (hunger never decremented off 20.0 before death).
+  HARVEST-under-attack in the ARMED config — death was atomic (step 1) there, so none of
+  these were reachable. A gentler config might reach them; not tested.
+- It did **not** root-cause the `/damage`-command one-shot quirk (irrelevant to mob death).
+- It did **not** observe starvation (hunger never decremented off 20.0; in the 60-step
+  no-threat control hunger stayed 20.0, and the armed run died too fast to starve).
+- It did **not** resolve the oak_log=0 harness discrepancy with `transfer_eval` (Finding 6).
 - The oak_log=0 harness discrepancy with `transfer_eval` is reported as an open
   anomaly, not resolved.
 
