@@ -70,11 +70,33 @@ NAT_STEPS = int(os.environ.get("NAT_STEPS", "400"))
 WALL_BUDGET_S = float(os.environ.get("NAT_WALL_CAP_S", 40 * 60))
 
 # Peaceful natural-world runtime setup (descoped: no hostiles / no hunger).
+#
+# Death-cause fix (verified from server log, NOT assumed): the v1 step-1 "term"
+# was a DEAD-PLAYER artifact — `gatherer_0 drowned` at 15:41:57 during the
+# /spreadplayers probe phase (a roll dropped it into ocean at ~3000,3000; it ran
+# out of air across the probe ticks), then `No entity was found` repeated through
+# the report write, so the deterministic /tp + policy loop ran against an absent
+# player (pos=None, step-1 term). Peaceful disables hostiles + hunger but NOT
+# drowning and NOT fall damage. So we complete the peaceful gathering-capability
+# scope by stripping the two non-gathering environmental hazards a far teleport
+# exposes:
+#   - water_breathing (infinite) — kills the OBSERVED drowning. 1.21.1 syntax
+#     verified live: `/effect give … water_breathing infinite 0 true` →
+#     "Applied effect Water Breathing". (`/gamerule drownDamage` does NOT exist
+#     in 1.21.1 — it parse-fails "Incorrect argument", so we use the effect.)
+#   - fallDamage false — added PRE-EMPTIVELY (not observed this run) for the
+#     not-yet-reached NAVIGATE-on-elevated-procedural-terrain phase (landing
+#     y≈103); a single 32-block NAVIGATE hop off a cliff would otherwise burn the
+#     run on a SECOND environmental artifact. 1.21.1 syntax verified live:
+#     "Gamerule fallDamage is now set to: false".
 PEACEFUL_CMDS = [
     "/difficulty peaceful",
     "/gamerule doDaylightCycle false",
+    "/gamerule fallDamage false",  # pre-emptive scope completion (NOT observed)
     "/time set 1000",  # midday, well-lit
     f"/gamemode survival {PLAYER_NAME}",
+    # cause-matched fix for the OBSERVED drowning (see block above):
+    f"/effect give {PLAYER_NAME} minecraft:water_breathing infinite 0 true",
 ]
 
 # Candidate far surface coords to probe for a procedural forest. We TP and read
@@ -250,12 +272,8 @@ def run_policy(env, module) -> dict:  # noqa: PLR0915
             batched = {k: _batch_obs_val(v) for k, v in aobs.items()}
             state_in = {k: v.unsqueeze(0) for k, v in state[aid].items()}
             with torch.no_grad():
-                out = module._forward_inference(
-                    {Columns.OBS: batched, Columns.STATE_IN: state_in}
-                )
-            action = _greedy_decode(
-                out[Columns.ACTION_DIST_INPUTS][0], aobs.get("action_mask")
-            )
+                out = module._forward_inference({Columns.OBS: batched, Columns.STATE_IN: state_in})
+            action = _greedy_decode(out[Columns.ACTION_DIST_INPUTS][0], aobs.get("action_mask"))
             actions[aid] = action
             new_state[aid] = {k: v.squeeze(0) for k, v in out[Columns.STATE_OUT].items()}
         state = new_state
@@ -427,17 +445,38 @@ def main() -> int:  # noqa: PLR0915
             )
         # Return DETERMINISTICALLY to the exact landing we MEASURED. The probe's
         # /spreadplayers rolls a random spot within range each call, so re-rolling
-        # would land somewhere new (the v1 bug: the agent never ran where the good
-        # perception was; a fresh roll dropped it off the y=103 terrain and it
-        # fall-died at step 1 — peaceful disables mobs/hunger, NOT fall damage).
-        # We /tp to best["pos"] where the agent stood ALIVE during the probe, and
-        # /forceload the area so the chunk stays loaded after probing elsewhere.
+        # would land somewhere new. (v1 root cause, located in the server log, NOT
+        # assumed: the agent did NOT run where the good perception was — a probe
+        # roll to ~3000,3000 dropped it into OCEAN and it DROWNED at 15:41:57; the
+        # remaining probes + the /tp + the policy loop all ran against an absent
+        # player, giving the pos=None / step-1 "term" artifact. Fixed by
+        # water_breathing in PEACEFUL_CMDS.) We /tp to best["pos"] where the agent
+        # stood ALIVE during the probe, and /forceload the area.
         if best and best.get("pos") is not None:
             bx, by, bz = best["pos"]
-            _run(env, f"/forceload add {int(bx) - 16} {int(bz) - 16} {int(bx) + 16} {int(bz) + 16}")
+            # FORCELOAD must cover the FULL multi-hop NAVIGATE reach, not just the
+            # landing chunk: NAVIGATE chains 32-block hops over an episode, so ±16
+            # (smaller than one hop) would let the agent walk into unloaded chunks
+            # and void-die. Size to the actual roam: ±48 (3 chunks each way from
+            # the spot, comfortably > a single 32-block hop). forceload coords are
+            # block coords; MC rounds to chunk granularity.
+            fl_r = 48
+            _run(
+                env,
+                f"/forceload add {int(bx) - fl_r} {int(bz) - fl_r} "
+                f"{int(bx) + fl_r} {int(bz) + fl_r}",
+            )
             _tick(env, 4)
             _run(env, f"/tp {PLAYER_NAME} {bx} {by} {bz}")
             _tick(env, 15)  # generous: chunk reload + settle (6 was marginal)
+            # Re-assert water_breathing AT the run spot (the long probe/tp sequence
+            # is safe to re-arm; infinite duration should persist but a re-login
+            # would drop it — the hard gate below catches any residual death).
+            _run(
+                env,
+                f"/effect give {PLAYER_NAME} minecraft:water_breathing infinite 0 true",
+            )
+            _tick(env, 1)
         else:
             _p("[place] no alive best spot with a position — cannot place; aborting policy run.")
         # Re-equip axe (survival players need the tool; reset_episode gave one
@@ -465,7 +504,52 @@ def main() -> int:  # noqa: PLR0915
             "probe_grid_log_cells": best.get("grid_log_cells") if best else None,
         }
 
-        # Run the proven policy.
+        # HARD ABORT GATE (advisor-mandated): the discriminator (oak_log delta)
+        # is only meaningful if the agent reached the run spot ALIVE, POSITIONED,
+        # and PERCEIVING. If any of those three fail here, the run would produce a
+        # "step-1 term / delta 0" that is INDISTINGUISHABLE from a real policy
+        # failure to harvest — exactly the artifact that made v1 inconclusive. So
+        # we ABORT before run_policy and report the SPECIFIC artifact, emitting NO
+        # policy delta. This also catches ANY residual environmental death (lava,
+        # an unprotected hazard) without our having to enumerate every hazard:
+        # neutralize the one we saw (drowning) and let the gate cleanly surface
+        # anything else as a NEW blocker.
+        abort_reason = None
+        if chk_pos is None:
+            abort_reason = "agent NOT POSITIONED at run spot (pos=None — dead/absent player)"
+        elif chk_h <= 0.0:
+            abort_reason = f"agent NOT ALIVE at run spot (health={chk_h})"
+        elif chk_cells == 0:
+            abort_reason = (
+                f"agent NOT PERCEIVING logs at run spot (grid_log_cells=0; "
+                f"probe measured {probe_cells}) — tp/chunk-reload likely failed"
+            )
+        if abort_reason is not None:
+            _p("")
+            _p("=" * 72)
+            _p(f"[ABORT] verify-before-measure FAILED: {abort_reason}")
+            _p("[ABORT] NOT running policy — a delta here would be a handoff")
+            _p("[ABORT] artifact, not a policy result. Reporting it as a blocker.")
+            _p("=" * 72)
+            results["policy"] = {
+                "aborted": True,
+                "abort_reason": abort_reason,
+                "perception_start": {
+                    "pos": chk_pos,
+                    "health": chk_h,
+                    "grid_log_cells": chk_cells,
+                },
+                "steps_run": 0,
+                "skill_histogram": {},
+                "oak_log_start": None,
+                "oak_log_final": None,
+                "oak_log_delta": None,
+            }
+            _write_report(results)
+            _summarize(results)
+            return 0
+
+        # Gate passed: agent alive, positioned, perceiving. delta now means policy.
         results["policy"] = run_policy(env, module)
 
         _write_report(results)
@@ -556,6 +640,43 @@ def _write_report(results: dict) -> None:  # noqa: PLR0915
         "spot where procedural logs register)."
     )
     a("")
+    a("## Death cause of the prior (v1) run — CAPTURED from the server log, not assumed")
+    a("")
+    a(
+        "The v1 run (15:45 report) ended at `step 1` with `term=True`, "
+        "`pos_first=None`, and was tentatively mislabelled a spawn race. The "
+        "actual cause was found in `instance-1.log`, not inferred: at "
+        "`15:41:57` the line `gatherer_0 drowned` appears, immediately after the "
+        "`15:41:20` `/spreadplayers 3000 3000` probe roll — i.e. a probe landing "
+        "dropped the fake player into OCEAN and it ran out of air across the "
+        "probe ticks. The next line, `gatherer_0 lost connection: gatherer_0 "
+        "died`, disconnected it; `No entity was found` then repeats from "
+        "`15:42:20` through the `15:45:40` report write. So the deterministic "
+        "`/tp` + the policy loop ALL ran against an absent/dead player — the "
+        "`pos=None` / step-1 `term` was a DEAD-PLAYER artifact, exactly the "
+        "mislabel suspected, but the cause is **DROWNING during the "
+        "`/spreadplayers` probe phase**, NOT fall, NOT void, NOT a spawn race. "
+        "Peaceful disables hostiles + hunger but NOT drowning."
+    )
+    a("")
+    a(
+        "**Fix, branched on the captured cause:** (1) PRIMARY — "
+        "`/effect give gatherer_0 minecraft:water_breathing infinite 0 true` in "
+        "the peaceful setup, which directly counters the OBSERVED drowning "
+        '(1.21.1 syntax verified live → "Applied effect Water Breathing"; note '
+        "`/gamerule drownDamage` does NOT exist in 1.21.1 — it parse-fails). "
+        "(2) PRE-EMPTIVE scope completion (NOT observed this run) — "
+        "`/gamerule fallDamage false` + an enlarged `/forceload` (±48, covering "
+        "the full multi-hop 32-block NAVIGATE reach rather than the prior ±16 "
+        "that was smaller than a single hop), so the not-yet-reached "
+        "NAVIGATE-on-elevated-terrain phase cannot burn the run on a SECOND "
+        "environmental artifact (fall or void). (3) A HARD-ABORT "
+        "verify-before-measure gate: if the agent is not alive + positioned + "
+        "perceiving at the run spot, the run aborts and reports the specific "
+        "artifact instead of emitting a delta indistinguishable from a real "
+        "harvest failure."
+    )
+    a("")
     a("## Perception-fix confirmation (pre-run)")
     a("")
     a(
@@ -624,21 +745,28 @@ def _write_report(results: dict) -> None:  # noqa: PLR0915
     a("")
     a("## (b) Does HARVEST collect oak_log from procedural trees? — accumulation")
     a("")
+    if pol.get("aborted"):
+        a(
+            "**RUN ABORTED at the verify-before-measure gate — NO policy delta "
+            f"emitted.** Reason: `{pol.get('abort_reason')}`. The agent did not "
+            "reach the run spot alive + positioned + perceiving, so any oak_log "
+            "delta would be a handoff/environment artifact indistinguishable from "
+            "a real failure to harvest (the v1 inconclusive mode). This is a "
+            "BLOCKER to report, not a policy result. The harvest question is "
+            "UNANSWERED this run."
+        )
+        a("")
     a(
         f"- oak_log start → final: `{pol.get('oak_log_start')}` → "
         f"`{pol.get('oak_log_final')}` (delta `{pol.get('oak_log_delta'):+d}`, "
         f"max seen `{pol.get('oak_log_max')}`)"
         if isinstance(pol.get("oak_log_delta"), int)
-        else f"- oak_log start → final: `{pol.get('oak_log_start')}` → "
-        f"`{pol.get('oak_log_final')}`"
+        else f"- oak_log start → final: `{pol.get('oak_log_start')}` → `{pol.get('oak_log_final')}`"
     )
     a(f"- steps run: `{pol.get('steps_run')}` (NAT_STEPS={NAT_STEPS})")
     a(f"- oak_log curve sample `(step, count)`: `{pol.get('oak_curve_sample')}`")
     a(f"- skill histogram: `{pol.get('skill_histogram')}`")
-    a(
-        f"- position first → last: `{pol.get('pos_first')}` → "
-        f"`{pol.get('pos_last')}`"
-    )
+    a(f"- position first → last: `{pol.get('pos_first')}` → `{pol.get('pos_last')}`")
     a(f"- terminated/truncated count: `{pol.get('n_terminated')}`/`{pol.get('n_truncated')}`")
     a(f"- wall time: `{pol.get('wall_s')}`s")
     a("")
