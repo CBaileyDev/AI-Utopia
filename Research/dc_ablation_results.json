@@ -1,0 +1,899 @@
+{
+  "meta": {
+    "iters": 200,
+    "train_seeds": [
+      1,
+      2,
+      3
+    ],
+    "heldout_seeds": [
+      90001,
+      90002,
+      90003,
+      90004,
+      90005
+    ]
+  },
+  "cells": {
+    "full": {
+      "follower": {
+        "cleared": 5,
+        "n": 5,
+        "per_seed": [
+          {
+            "seed": 90001,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90002,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90003,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90004,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90005,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          }
+        ]
+      },
+      "policy": {
+        "1": {
+          "cleared": 5,
+          "n": 5,
+          "per_seed": [
+            {
+              "seed": 90001,
+              "oak": 64,
+              "steps": 17,
+              "NAVIGATE": 1,
+              "HARVEST": 16,
+              "end": "SUCCESS",
+              "cleared": true
+            },
+            {
+              "seed": 90002,
+              "oak": 64,
+              "steps": 17,
+              "NAVIGATE": 1,
+              "HARVEST": 16,
+              "end": "SUCCESS",
+              "cleared": true
+            },
+            {
+              "seed": 90003,
+              "oak": 64,
+              "steps": 17,
+              "NAVIGATE": 1,
+              "HARVEST": 16,
+              "end": "SUCCESS",
+              "cleared": true
+            },
+            {
+              "seed": 90004,
+              "oak": 64,
+              "steps": 17,
+              "NAVIGATE": 1,
+              "HARVEST": 16,
+              "end": "SUCCESS",
+              "cleared": true
+            },
+            {
+              "seed": 90005,
+              "oak": 64,
+              "steps": 17,
+              "NAVIGATE": 1,
+              "HARVEST": 16,
+              "end": "SUCCESS",
+              "cleared": true
+            }
+          ],
+          "train_wall_s": 765.5,
+          "final_ret_mean": -32.56,
+          "ret_curve_tail": [
+            -47.34,
+            -1.19,
+            51.66,
+            17.24,
+            -32.56
+          ]
+        },
+        "2": {
+          "cleared": 0,
+          "n": 5,
+          "per_seed": [
+            {
+              "seed": 90001,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90002,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90003,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90004,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90005,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            }
+          ],
+          "train_wall_s": 758.5,
+          "final_ret_mean": -1.24,
+          "ret_curve_tail": [
+            -14.6,
+            -9.43,
+            -7.91,
+            -35.23,
+            -1.24
+          ]
+        },
+        "3": {
+          "cleared": 5,
+          "n": 5,
+          "per_seed": [
+            {
+              "seed": 90001,
+              "oak": 64,
+              "steps": 17,
+              "NAVIGATE": 1,
+              "HARVEST": 16,
+              "end": "SUCCESS",
+              "cleared": true
+            },
+            {
+              "seed": 90002,
+              "oak": 64,
+              "steps": 17,
+              "NAVIGATE": 1,
+              "HARVEST": 16,
+              "end": "SUCCESS",
+              "cleared": true
+            },
+            {
+              "seed": 90003,
+              "oak": 64,
+              "steps": 17,
+              "NAVIGATE": 1,
+              "HARVEST": 16,
+              "end": "SUCCESS",
+              "cleared": true
+            },
+            {
+              "seed": 90004,
+              "oak": 64,
+              "steps": 17,
+              "NAVIGATE": 1,
+              "HARVEST": 16,
+              "end": "SUCCESS",
+              "cleared": true
+            },
+            {
+              "seed": 90005,
+              "oak": 64,
+              "steps": 17,
+              "NAVIGATE": 1,
+              "HARVEST": 16,
+              "end": "SUCCESS",
+              "cleared": true
+            }
+          ],
+          "train_wall_s": 763.2,
+          "final_ret_mean": -22.41,
+          "ret_curve_tail": [
+            53.38,
+            36.8,
+            39.92,
+            70.58,
+            -22.41
+          ]
+        }
+      }
+    },
+    "mask_only": {
+      "follower": {
+        "cleared": 5,
+        "n": 5,
+        "per_seed": [
+          {
+            "seed": 90001,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90002,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90003,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90004,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90005,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          }
+        ]
+      },
+      "policy": {
+        "1": {
+          "cleared": 3,
+          "n": 5,
+          "per_seed": [
+            {
+              "seed": 90001,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 192,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90002,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 192,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90003,
+              "oak": 64,
+              "steps": 17,
+              "NAVIGATE": 1,
+              "HARVEST": 16,
+              "end": "SUCCESS",
+              "cleared": true
+            },
+            {
+              "seed": 90004,
+              "oak": 64,
+              "steps": 17,
+              "NAVIGATE": 1,
+              "HARVEST": 16,
+              "end": "SUCCESS",
+              "cleared": true
+            },
+            {
+              "seed": 90005,
+              "oak": 64,
+              "steps": 17,
+              "NAVIGATE": 1,
+              "HARVEST": 16,
+              "end": "SUCCESS",
+              "cleared": true
+            }
+          ],
+          "train_wall_s": 758.6,
+          "final_ret_mean": -32.64,
+          "ret_curve_tail": [
+            35.05,
+            -48.15,
+            9.97,
+            -41.92,
+            -32.64
+          ]
+        },
+        "2": {
+          "cleared": 0,
+          "n": 5,
+          "per_seed": [
+            {
+              "seed": 90001,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90002,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90003,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90004,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90005,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            }
+          ],
+          "train_wall_s": 759.2,
+          "final_ret_mean": 37.75,
+          "ret_curve_tail": [
+            -26.69,
+            -34.34,
+            17.41,
+            0.8,
+            37.75
+          ]
+        },
+        "3": {
+          "cleared": 1,
+          "n": 5,
+          "per_seed": [
+            {
+              "seed": 90001,
+              "oak": 32,
+              "steps": 11,
+              "NAVIGATE": 3,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90002,
+              "oak": 64,
+              "steps": 17,
+              "NAVIGATE": 1,
+              "HARVEST": 16,
+              "end": "SUCCESS",
+              "cleared": true
+            },
+            {
+              "seed": 90003,
+              "oak": 32,
+              "steps": 11,
+              "NAVIGATE": 3,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90004,
+              "oak": 32,
+              "steps": 11,
+              "NAVIGATE": 3,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90005,
+              "oak": 32,
+              "steps": 11,
+              "NAVIGATE": 3,
+              "HARVEST": 8,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            }
+          ],
+          "train_wall_s": 757.0,
+          "final_ret_mean": -4.7,
+          "ret_curve_tail": [
+            44.5,
+            44.2,
+            35.21,
+            21.95,
+            -4.7
+          ]
+        }
+      }
+    },
+    "cue_only": {
+      "follower": {
+        "cleared": 5,
+        "n": 5,
+        "per_seed": [
+          {
+            "seed": 90001,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90002,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90003,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90004,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90005,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          }
+        ]
+      },
+      "policy": {
+        "1": {
+          "cleared": 0,
+          "n": 5,
+          "per_seed": [
+            {
+              "seed": 90001,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90002,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90003,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90004,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90005,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            }
+          ],
+          "train_wall_s": 760.9,
+          "final_ret_mean": -32.56,
+          "ret_curve_tail": [
+            -47.34,
+            -1.19,
+            51.66,
+            17.24,
+            -32.56
+          ]
+        },
+        "2": {
+          "cleared": 0,
+          "n": 5,
+          "per_seed": [
+            {
+              "seed": 90001,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90002,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90003,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90004,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90005,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            }
+          ],
+          "train_wall_s": 759.6,
+          "final_ret_mean": -1.24,
+          "ret_curve_tail": [
+            -14.6,
+            -9.43,
+            -7.91,
+            -35.23,
+            -1.24
+          ]
+        },
+        "3": {
+          "cleared": 0,
+          "n": 5,
+          "per_seed": [
+            {
+              "seed": 90001,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90002,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90003,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90004,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90005,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            }
+          ],
+          "train_wall_s": 762.3,
+          "final_ret_mean": -22.41,
+          "ret_curve_tail": [
+            53.38,
+            36.8,
+            39.92,
+            70.58,
+            -22.41
+          ]
+        }
+      }
+    },
+    "neither": {
+      "follower": {
+        "cleared": 5,
+        "n": 5,
+        "per_seed": [
+          {
+            "seed": 90001,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90002,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90003,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90004,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          },
+          {
+            "seed": 90005,
+            "oak": 64,
+            "NAVIGATE": 1,
+            "cleared": true
+          }
+        ]
+      },
+      "policy": {
+        "1": {
+          "cleared": 0,
+          "n": 5,
+          "per_seed": [
+            {
+              "seed": 90001,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90002,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90003,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90004,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90005,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            }
+          ],
+          "train_wall_s": 757.5,
+          "final_ret_mean": -32.64,
+          "ret_curve_tail": [
+            35.05,
+            -48.15,
+            9.97,
+            -41.92,
+            -32.64
+          ]
+        },
+        "2": {
+          "cleared": 0,
+          "n": 5,
+          "per_seed": [
+            {
+              "seed": 90001,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90002,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90003,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90004,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90005,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            }
+          ],
+          "train_wall_s": 754.0,
+          "final_ret_mean": 37.75,
+          "ret_curve_tail": [
+            -26.69,
+            -34.34,
+            17.41,
+            0.8,
+            37.75
+          ]
+        },
+        "3": {
+          "cleared": 0,
+          "n": 5,
+          "per_seed": [
+            {
+              "seed": 90001,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90002,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90003,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90004,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            },
+            {
+              "seed": 90005,
+              "oak": 32,
+              "steps": 200,
+              "NAVIGATE": 0,
+              "HARVEST": 200,
+              "end": "TICK_LIMIT",
+              "cleared": false
+            }
+          ],
+          "train_wall_s": 763.6,
+          "final_ret_mean": -4.7,
+          "ret_curve_tail": [
+            44.5,
+            44.2,
+            35.21,
+            21.95,
+            -4.7
+          ]
+        }
+      }
+    }
+  }
+}

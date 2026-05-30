@@ -3,6 +3,43 @@
 This supersedes the earlier post-v20 handoff. Read `PROJECT_CONTEXT.md` for the
 big picture; this captures the current frontier.
 
+## ⏩ START HERE — overnight 2026-05-30: oracle-ablation characterization (READ `Research/MORNING_BRIEF.md`)
+
+A sim-only oracle ablation (4 cells × 3 seeds × 200 iters) measured how much of
+the decision-core's blind-explore clearance is the POLICY vs the env oracle.
+**Headline: a zero-learning scripted follower ≥ the trained PPO policy in EVERY
+cell.** When PPO doesn't collapse it merely reproduces the follower; the
+perception MASK is the single load-bearing crutch (remove it → greedy 0/5).
+
+| cell | mask | cue | follower | policy (per seed) | gap |
+|---|---|---|---|---|---|
+| full | ON | ON | 5/5 | {5,0,5}=3.3 | −1.7 |
+| mask_only | ON | off | 5/5 | {3,0,1}=1.3 | −3.7 |
+| cue_only | off | ON | 5/5 | {0,0,0}=0.0 | −5.0 |
+| neither | off | off | 5/5 | {0,0,0}=0.0 (oak=32, NAV=0) | −5.0 |
+
+**Defensible:** follower ≥ policy every cell; full working seeds ARE the follower
+(NAV=1, SUCCESS); PPO unstable (non-finite KL under kl_coeff=0.2; seeds collapse).
+**Do NOT over-claim "PPO can't learn search" — UNTESTED + confounded:** (1) KL was
+never set to 0 (training broken); (2) the follower clears even `neither` 5/5 with a
+fixed −z heading → the eval arena doesn't REQUIRE directed search; (3) mask-off
+cells were greedy-only (HARVEST-when-blind decode artifact). A KL=0 de-confound on
+the full cell is running (`Research/dc_kl0_full.json`).
+
+**DESIGN FORK (yours to call — see brief):** (a) thin reactive controller + put
+intelligence in PRODUCERS (real Explorer emits the cue from partial info; keep the
+mask); (b) genuine search learning — untested, needs a stabilized trainer (kl=0)
+AND a search-requiring arena (fixed-heading must fail). Lean (a) for the immediate
+Lumberjack; (b) is the open research question. **Promotion deferred** (user-gated:
+ambiguous checkpoint + unmeetable §5.10 + deploy-adjacent). **Phase D Java scoped,
+NOT built** (`docs/.../2026-05-29-phase-d-decision-core-java-scoping.md`;
+build/deploy/restart reserved for you).
+
+Commits this run: `bf89c97` (AIUTOPIA_DATA_DIR), `7ad92c4` (decouple mask/cue),
+`c48af03` (dc_ablation harness), `3c20f83` (Phase D scoping), + this handoff.
+
+---
+
 ## 🟡 M2 DECISION-CORE (N22, 2026-05-29) — MECHANISM works; policy learning UNVERIFIED
 
 Executed the advisor/workflow-recommended **Option B pivot** (make the POLICY decide,

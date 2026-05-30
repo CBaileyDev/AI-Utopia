@@ -94,6 +94,13 @@ def _build_cfg(ablation: str, seed: int):
     env_config.update(ABLATIONS[ablation])
     cfg = cfg.environment(env_config=env_config)
     cfg = cfg.learners(num_learners=0, num_gpus_per_learner=1.0)
+    # DC_KL_COEFF override (de-confound knob): the base config uses kl_coeff=0.2,
+    # under which every decision-core run logs non-finite KL (the warning's own
+    # remedy is kl_coeff=0). Set DC_KL_COEFF=0 to test whether the seed collapses
+    # are the KL blowup vs a genuine learning failure. Unset = base config (0.2).
+    _kl = os.environ.get("DC_KL_COEFF")
+    if _kl is not None:
+        cfg = cfg.training(kl_coeff=float(_kl))
     return cfg
 
 
