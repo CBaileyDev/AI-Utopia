@@ -70,8 +70,14 @@ Reading it:
 **Defensible (the bankable findings):**
 1. A reactive, zero-learning follower ≥ the trained policy in every cell.
 2. The full-cell working seeds reproduce the follower exactly (NAVIGATE=1, SUCCESS).
-3. PPO is unstable under the current config (`kl_coeff=0.2`): non-finite KL in
-   every run, reproducible, with seed-level collapses.
+3. PPO does not converge on this task. The failing seed (full s2) oscillates its
+   return wildly (−23…+40) across all 200 iters with **persistently high entropy
+   (~12, no decay)** and small finite per-iter KL — i.e. NOT an entropy collapse
+   and NOT a KL blowup, but a trainer with no stable gradient toward a
+   better-than-reactive policy. (The intermittent non-finite-KL *warning* is a
+   masked-zero-prob-action symptom, not the failure mode.) Corollary: greedy
+   (argmax) eval of such a high-entropy non-converged policy is unreliable — a
+   sampled-eval control (confound #3) would be fairer.
 
 **Untested — do NOT read the ablation as "PPO can't learn search":**
 1. **Training is broken at a level deeper than kl_coeff.** Non-finite KL fires in
@@ -172,3 +178,11 @@ PYTHONPATH=src AIUTOPIA_ROOT=/c/Users/Carte/OneDrive/Desktop/AiUtopia \
   This does NOT change confound #1's verdict — a *properly stabilized* trainer
   (the real fix, not just kl=0) on a search-requiring arena is still untested. It
   does mean "just set kl=0" is not that fix.
+- **Entropy probe (full s2, the collapsing seed, to 200 iters):** entropy stays
+  **~12 flat** (13.9→12.1, no decay), per-iter KL stays small/finite (~0.004–0.02),
+  return **oscillates −23…+40 and never converges**. ⇒ the 0/5 is non-convergence +
+  greedy-mode misalignment on a still-stochastic policy — NOT entropy collapse, NOT
+  KL. So the honest lead for fork (b) is "the trainer never finds a stable
+  better-than-reactive gradient here" — which points at the reward/exploration
+  signal + a search-requiring arena, NOT at kl/entropy hyperparameter tweaks alone.
+  (Probe was a single diagnostic run, not a sweep.)
