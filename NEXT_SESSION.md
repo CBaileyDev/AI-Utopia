@@ -50,6 +50,21 @@ build/deploy/restart reserved for you).
 Commits this run: `bf89c97` (AIUTOPIA_DATA_DIR), `7ad92c4` (decouple mask/cue),
 `c48af03` (dc_ablation harness), `3c20f83` (Phase D scoping), + this handoff.
 
+**⚡ 12h-autonomous-run update (2026-05-30) — scout built; "validated" WITHDRAWN.**
+Built a partial-info `FrontierScout` + a decisive no-training follower test
+(`scripts/dc_scout_follower.py`). Findings: (a) the old `clusters` arena was
+DEGENERATE (cluster B always south — `_cluster_bases` dirs all dz=−1 — a fixed
+heading cleared it 10/10, inflating ALL prior blind-explore results); (b) on a new
+non-degenerate `clusters_omni` arena, the WFD scout got 14/24, a committed
+open-loop `SweepScout` got 50/50, fixed-heading 21/50. The 50/50 was initially
+committed (`c1083a9`) as "Fork-A VALIDATED" — **CORRECTED**: SweepScout ignores
+perception (open-loop lawnmower) and bakes in B's radius, so the win is exhaustive
+coverage tuned to the toy, NOT partial-info scouting. **Partial-info scouting (the
+real Explorer question) remains UNTESTED**; a non-gameable test needs B at
+variable/unknown radius + a steps-to-clear metric. See `Research/MORNING_BRIEF.md`
+"UPDATE 2". Lesson (5th over-claim this session): the sim toy keeps rewarding
+whatever exploits its structure — verify the metric isn't gameable before claiming.
+
 ---
 
 ## 🟡 M2 DECISION-CORE (N22, 2026-05-29) — MECHANISM works; policy learning UNVERIFIED

@@ -227,6 +227,35 @@ a committed scout can't beat fixed-heading on the omni arena, "directed search f
 partial info" needs Level-2+/learning — a real, multi-session research item, honestly
 flagged rather than hidden behind a degenerate arena.
 
+### ⚡ UPDATE 2 — omni arena + sweep scout: a CORRECTED claim (do not read as "Fork A validated")
+
+After the degeneracy finding I built a non-degenerate `clusters_omni` arena (cluster
+B uniform in 8 directions) and a committed `SweepScout`, and the scripted follower
+cleared **50/50** with it (vs fixed-heading 21/50, oracle 24/24). I initially
+committed this as "Fork-A producer VALIDATED." **That was an over-claim — corrected
+here (and in a follow-up commit).** What it actually shows:
+
+1. **The win is exhaustive COVERAGE, not partial-info reasoning.** `SweepScout` is
+   *open-loop*: it ignores perception entirely (`observe()` is dead code) and just
+   lawnmowers 12 compass directions. The tell: the perception-*using* WFD scout got
+   14/24 while the perception-*ignoring* sweep got 50/50. Perception is carrying **no
+   weight** — the opposite of validating a partial-info producer.
+2. **It's tuned to the toy.** The out-and-back hop distance (32) bakes in B's known
+   radius (24–30). Put B at radius 55 and the sweep clears 0. It neither scales nor
+   generalizes — "find the distant forest" has unknown/variable range.
+3. **Efficiency gap remains:** oracle clears with NAV≈1; the sweep is many-hop. It
+   ties oracle only on the binary success metric, loses on steps-to-clear (the metric
+   that matters in a time/energy-bounded game).
+
+**Honest status of the fork question:** a reactive controller + perception-triggered
+harvest works; the omni arena is solvable by exhaustive coverage (so it doesn't test
+scouting either); **partial-information scouting — producing good bearings from what's
+been observed — remains UNTESTED.** A non-gameable test needs B at *variable/unknown*
+radius (e.g. 20–60) **and** a steps-to-clear metric, so a producer can only win by
+*using* observations. The scout/arena/tests are kept as infrastructure; the claim is
+withdrawn. (Code: `sim/scout.py`, `sim/world.py` `clusters_omni`,
+`scripts/dc_scout_follower.py`.)
+
 ### Updated recommendation (research + our data now agree)
 Lean **Fork A, staged to B** — strengthened from "weak" to corroborated by external
 consensus *and* consistent with our ablation. Highest-leverage, fully **ungated**
