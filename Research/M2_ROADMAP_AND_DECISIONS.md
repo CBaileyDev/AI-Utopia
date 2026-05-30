@@ -119,6 +119,36 @@ This is why the recommendations push toward real-MC/survival (D3) and the planne
 not more flat-sim roles. I deliberately did not build a toy role tonight because it would
 manufacture a low-value "win" of exactly the kind that's been getting walked back.
 
+## ✅ D3 RECON DONE (2026-05-30) — survival is a MAJOR MILESTONE, not a quick increment
+
+Ran the proven Lumberjack under real survival pressure (runtime `runCommand`, no Java
+rebuild). Report: `Research/SURVIVAL_RECON.md`; code: `scripts/survival_recon.py`
+(commits `87972f2`, `019bab2`). Honest findings (subagent self-corrected 3 over-claims):
+- **Dies on step 1 to a single zombie** (mob-caused, isolated by a no-threat control
+  that survived 60 steps). No armor, no fight/eat skill, no learned flee.
+- **INFRA BLOCKER — atomic combat under tick-warp:** combat resolves *between* obs
+  samples, so the policy never gets a mid-combat observation. **Survival behavior is
+  unobservable/untrainable while tick-warp is on** — this must be solved first.
+- `g_hostiles_nearby` **populates correctly with real mobs** (positive — only zero in
+  training). The policy **ignores it** (OOD: trained at constant health/hunger, empty
+  hostiles).
+- Starvation caps at 1 HP on `/difficulty normal` (never kills) → **mobs, not hunger,
+  are the killer** → an EAT skill is NOT the priority; surviving mobs is.
+- Carpet fake players spawn **invulnerable** until `/gamemode survival` (re-applied per
+  episode) — a real-MC gotcha for any survival work.
+- Flagged (not root-caused): the recon harness collected 0 oak_log even with no
+  pressure — likely the documented real-HARVEST non-determinism (memory: "#1 Phase-C
+  item"), since `transfer_eval` still gets 3/3.
+
+**Survival milestone scope (the real shape):** (1) solve tick-warp combat
+observability (per-tick obs during threat, or tick-warp off in combat) — the
+prerequisite; (2) a survival reward (penalize death/damage); (3) survival-aware
+training (mobs/hunger varied in the env so the OOD signals become in-distribution);
+(4) the cheapest survival CAPABILITY is **flee** — it needs NO new skill (NAVIGATE
+away from `g_hostiles_nearby` already in the action+obs space), just training; fight
+(ATTACK) / eat are later. This is M-level work (multi-session), worth a deliberate
+go/no-go before sinking build hours.
+
 ## Infra built this run (kept, reusable)
 `sim/scout.py` (FrontierScout, SweepScout), `sim/world.py clusters_omni`,
 `scripts/dc_scout_follower.py`, `scripts/dc_ablation.py`, the sim mask/cue knobs +
