@@ -74,9 +74,13 @@ Reading it:
    every run, reproducible, with seed-level collapses.
 
 **Untested — do NOT read the ablation as "PPO can't learn search":**
-1. **Training was broken.** kl_coeff stayed 0.2; the non-finite-KL warning's own
-   remedy (kl_coeff=0 / higher entropy) was never applied. Collapses may be the
-   KL blowup, not a learning ceiling. *(Optional de-confound below.)*
+1. **Training is broken at a level deeper than kl_coeff.** Non-finite KL fires in
+   every run; some seeds collapse to never-explore (0/5). I ran the de-confound
+   (full cell at kl_coeff=0): it reproduced the baseline {5,0,5} *exactly* and
+   STILL threw non-finite-KL — so the warning's stock remedy doesn't fix it. A
+   genuinely stabilized trainer (entropy bump / masked-comm-head `log_std` fix /
+   the deterministic-env zero-prob cause) is the real prerequisite — **untested**.
+   Until that, collapses may be instability, not a learning ceiling.
 2. **The eval arena doesn't require search.** The follower clears even the
    no-cue `neither` cell 5/5 with a *fixed −z heading*. If a fixed heading
    solves it, there's no directed search to learn — so the no-cue cells can't
@@ -158,8 +162,13 @@ PYTHONPATH=src AIUTOPIA_ROOT=/c/Users/Carte/OneDrive/Desktop/AiUtopia \
 - Discriminator (zero-learning follower): `scripts/_dc_follower.py`.
 - Sim env knobs added: `harvest_perception_mask`, `harvest_mask_off` (sim_env.py);
   `DC_KL_COEFF` knob in the harness.
-- **KL de-confound (running):** full cell ×3 seeds at `kl_coeff=0`
-  (`Research/dc_kl0_full.json` / `dc_kl0.log`). Tests whether the full-cell seed-2
-  collapse is the non-finite-KL blowup (expected: kl=0 stabilizes → fewer/no
-  collapses) vs a policy limit. Result is a footnote to claim (iii), NOT a new
-  sweep. Check that file for the outcome.
+- **KL de-confound (DONE):** full cell ×3 seeds at `kl_coeff=0`
+  (`Research/dc_kl0_full.json`) → **{5, 0, 5} = identical to the kl=0.2 baseline**,
+  same seed-2 collapse (NAV=0), and **3 non-finite-KL warnings still appeared**.
+  ⇒ **kl_coeff is NOT the instability driver** — the warning's own suggested
+  remedy (kl=0) does not fix the collapse. So claim (iii) sharpens: the instability
+  is *deeper* than the KL term (candidates: `entropy_coeff`, the masked-comm-head
+  `log_std`, or the deterministic-env near-zero-prob action the warning describes).
+  This does NOT change confound #1's verdict — a *properly stabilized* trainer
+  (the real fix, not just kl=0) on a search-requiring arena is still untested. It
+  does mean "just set kl=0" is not that fix.
