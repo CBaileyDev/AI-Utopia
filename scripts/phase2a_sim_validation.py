@@ -56,7 +56,7 @@ def main() -> None:
 
     # Get obs/action spaces
     action_spaces = {role: build_role_action_space(role) for role in roles}
-    obs_spaces = {role: build_role_observation_space(role) for role in roles}
+    obs_spaces = {role: build_role_observation_space(role, stage=1) for role in roles}
 
     # Reset
     obs, infos = env.reset(seed=1)
