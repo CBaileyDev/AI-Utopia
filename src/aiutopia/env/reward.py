@@ -416,20 +416,25 @@ def explorer_potential(obs_curr: dict, decay_coeff: float = 1.0) -> float:
 
 def farmer_potential(obs_curr: dict, decay_coeff: float = 1.0) -> float:
     """§M2 — Φ(s) for Farmer's temporal credit assignment shaping.
-    
+
     Three terms: planting progress, ripeness progress, timeliness.
     Scaled to 0–100 range to match tech_tree_potential's magnitude (CTDE).
     """
+    def _extract_scalar(val):
+        """Extract scalar from various numpy/list formats."""
+        if isinstance(val, np.ndarray):
+            return float(val.item() if val.ndim == 0 else val.flat[0])
+        elif isinstance(val, (list, tuple)):
+            return float(val[0])
+        else:
+            return float(val)
+
     # Term 1: Planting progress (0–1, then scaled)
-    planted_count = obs_curr.get("f_planted_count", (0,))[0] if isinstance(obs_curr.get("f_planted_count"), (list, np.ndarray)) else 0
-    if isinstance(planted_count, np.ndarray):
-        planted_count = planted_count.item()
+    planted_count = _extract_scalar(obs_curr.get("f_planted_count", 0.0))
     planted_progress = min(1.0, float(planted_count) / 64.0)
 
     # Term 2: Ripeness progress (already 0–1)
-    ripeness = obs_curr.get("f_ripeness", (0,))[0] if isinstance(obs_curr.get("f_ripeness"), (list, np.ndarray)) else 0
-    if isinstance(ripeness, np.ndarray):
-        ripeness = ripeness.item()
+    ripeness = _extract_scalar(obs_curr.get("f_ripeness", 0.0))
     ripeness_progress = float(ripeness)
 
     # Term 3: Timeliness (inverse staleness)
@@ -438,10 +443,10 @@ def farmer_potential(obs_curr: dict, decay_coeff: float = 1.0) -> float:
     timeliness = 0.0
     if crop_grid is not None and time_at_ripeness is not None:
         crop_grid = np.asarray(crop_grid)
-        time_at_ripeness = np.asarray(time_at_ripeness)
+        time_at_ripeness_arr = np.asarray(time_at_ripeness)
         ripe_cells = crop_grid == 8
         if ripe_cells.any():
-            staleness = np.minimum(1.0, time_at_ripeness[ripe_cells] / 50.0)
+            staleness = np.minimum(1.0, time_at_ripeness_arr[ripe_cells] / 50.0)
             timeliness = float(np.mean(1.0 - staleness))
 
     # Composite with decay + magnitude scaling
@@ -458,19 +463,23 @@ def _compute_reward_stage_1_explorer(
     *, obs_prev: dict, obs_curr: dict, action: dict, env_meta: dict
 ) -> float:
     """Explorer stage-1 reward (M2 design spec).
-    
+
     r_explorer = r_discovery + r_pbrs - r_death - r_time - r_stuck
-    
+
     Primary signal: +1.0 when richness_score crosses discovery threshold.
     Shaping: optional progress/coverage terms (deferred to M2.2).
     """
-    richness_prev = obs_prev.get("g_richness_score", (0,))[0] if isinstance(obs_prev.get("g_richness_score"), (list, np.ndarray)) else 0
-    richness_curr = obs_curr.get("g_richness_score", (0,))[0] if isinstance(obs_curr.get("g_richness_score"), (list, np.ndarray)) else 0
+    def _extract_scalar(val):
+        """Extract scalar from various numpy/list formats."""
+        if isinstance(val, np.ndarray):
+            return float(val.item() if val.ndim == 0 else val[0])
+        elif isinstance(val, (list, tuple)):
+            return float(val[0])
+        else:
+            return float(val)
 
-    if isinstance(richness_prev, np.ndarray):
-        richness_prev = richness_prev.item()
-    if isinstance(richness_curr, np.ndarray):
-        richness_curr = richness_curr.item()
+    richness_prev = _extract_scalar(obs_prev.get("g_richness_score", 0.0))
+    richness_curr = _extract_scalar(obs_curr.get("g_richness_score", 0.0))
 
     # Sparse discovery: +1.0 when richness crosses threshold (8 logs in 16-block window)
     discovery_threshold = 0.125  # 8 / 64
@@ -491,29 +500,31 @@ def _compute_reward_stage_1_farmer(
     *, obs_prev: dict, obs_curr: dict, action: dict, env_meta: dict
 ) -> float:
     """Farmer stage-1 reward (M2 design spec).
-    
+
     r_farmer = r_principal + r_pbrs - r_death - r_time - r_exploits - r_clip
-    
+
     Primary: +1.0 per unique harvested cell.
     Shaping: farmer_potential with temporal decay.
     Exploits: re-planting, unripe harvest, idle waiting.
     """
+    def _extract_scalar(val):
+        """Extract scalar from various numpy/list formats."""
+        if isinstance(val, np.ndarray):
+            return float(val.item() if val.ndim == 0 else val[0])
+        elif isinstance(val, (list, tuple)):
+            return float(val[0])
+        else:
+            return float(val)
+
     # Sparse principal: incremented per unique harvested cell
-    harvested_prev = obs_prev.get("f_harvested_count", (0,))[0] if isinstance(obs_prev.get("f_harvested_count"), (list, np.ndarray)) else 0
-    harvested_curr = obs_curr.get("f_harvested_count", (0,))[0] if isinstance(obs_curr.get("f_harvested_count"), (list, np.ndarray)) else 0
+    harvested_prev = int(_extract_scalar(obs_prev.get("f_harvested_count", 0.0)))
+    harvested_curr = int(_extract_scalar(obs_curr.get("f_harvested_count", 0.0)))
 
-    if isinstance(harvested_prev, np.ndarray):
-        harvested_prev = harvested_prev.item()
-    if isinstance(harvested_curr, np.ndarray):
-        harvested_curr = harvested_curr.item()
-
-    harvested_delta = max(0, int(harvested_curr) - int(harvested_prev))
+    harvested_delta = max(0, harvested_curr - harvested_prev)
     r_principal = float(harvested_delta)
 
     # PBRS with decay
-    tick_curr = obs_curr.get("tick_in_episode", (0,))[0]
-    if isinstance(tick_curr, np.ndarray):
-        tick_curr = tick_curr.item()
+    tick_curr = _extract_scalar(obs_curr.get("tick_in_episode", 0.0))
     max_ticks = env_meta.get("max_episode_ticks", 1000)
     decay_curr = max(0.0, 1.0 - float(tick_curr) / float(max_ticks))
     decay_next = max(0.0, 1.0 - (float(tick_curr) + 1.0) / float(max_ticks))
