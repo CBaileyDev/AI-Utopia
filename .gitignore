@@ -41,3 +41,11 @@ fabric_mod/.idea/
 
 # Local server runtime (mods, world, logs — not part of source)
 server-runtime/
+
+# Transient research run logs / pids / probe outputs.
+# Committed research artifacts are .md / .json (kept) — only the run logs are noise.
+Research/*.log
+Research/*.log.pid
+Research/*.log.session*
+Research/*.pid
+Research/.probe-*
