@@ -3,6 +3,37 @@
 This supersedes the earlier post-v20 handoff. Read `PROJECT_CONTEXT.md` for the
 big picture; this captures the current frontier.
 
+## ⏩⏩ START HERE (2026-05-30 PM) — PEACEFUL-WORLD PIVOT + natural-terrain perception FIXED
+
+User set the scope to a **peaceful survival world** (combat/threat layer descoped — see
+`Research/M2_ROADMAP_AND_DECISIONS.md` "SCOPE DECISION"). Two recons + a real fix landed:
+- **Survival recon** (`Research/SURVIVAL_RECON.md`): proven Lumberjack dies step 1 to one
+  mob, no eat/fight skill, ignores hostiles (OOD). Moot under peaceful scope.
+- **Natural-terrain recon** (`Research/NATURAL_RECON.md`): the obs scanned topmost-NON-AIR
+  per column → **leaves occluded logs** (natural trunks invisible). HARVEST still chops them.
+- **✅ PERCEPTION FIX (`275b48a`):** `GathererOverlayBuilder` now scans topmost **LOG**
+  per column (skips leaves) — log-under-leaf goes invisible→**SEEN** (A/B: dist 999→2.83).
+  VERIFIED NEUTRAL on the proven path: golden trace **byte-identical** (maxΔ=0), suite 238
+  green, sim-control **64/64**, real **seed2 64/64**. Brings Java into parity with the sim.
+- **✅ Proven M1B checkpoint IDENTIFIED + PINNED:** only
+  `PPO_aiutopia_sim_2f908_.../checkpoint_000003` clears sim 64/64 (sweep:
+  `scripts/find_proven_checkpoint.py`); all other non-DC runs collapsed. `transfer_eval`
+  now pins it (`TRANSFER_CKPT` overrides). Fixes the checkpoint-identity gap that bit
+  transfer + promotion. Commits `275b48a`,`1b539e3` (perception+A/B), eval-selection +
+  pin fixes, `find_proven_checkpoint.py`.
+- **Known gate flakiness (PRE-EXISTING, not the fix):** the transfer gate's FIRST scenario
+  per process eats a spawn-race (0/64 in ~3 steps → re-run / a warmup-reset would fix it);
+  seed3 caps ~58/64 (documented real-HARVEST non-determinism). seed2 64/64 is the clean
+  signal that the proven policy + perception fix work.
+
+**NEXT (peaceful-village forward work):** (1) validate gathering on FULL procedural trees
+(the recon used a /setblock leaf stand-in); (2) lift the wrapper's ±24 arena-bounds
+truncation for natural-world operation (recon finding #3); (3) the Explorer "find scattered
+forests" problem — now REAL + testable in a natural world (the flat toy couldn't); (4)
+optional eval-hygiene: add a warmup-reset to transfer_eval so the first seed stops racing.
+
+---
+
 ## ⏩ START HERE — overnight 2026-05-30: oracle-ablation characterization (READ `Research/MORNING_BRIEF.md`)
 
 A sim-only oracle ablation (4 cells × 3 seeds × 200 iters) measured how much of
