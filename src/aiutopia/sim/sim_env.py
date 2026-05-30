@@ -160,6 +160,17 @@ class AiUtopiaSimEnv(ParallelEnv):
         # -resource into g_hostiles_nearby[0] so the policy can explore the RIGHT way
         # (closes the blind-explore-direction gap). Sim-only experiment.
         self._resource_bearing_cue = bool(config.get("resource_bearing_cue", False))
+        # Oracle-ablation knobs (sim-only, default = current decision_core behavior):
+        # decouple the perception HARVEST mask from decision_core so the two crutches
+        # (perception-mask = WHEN, bearing-cue = WHICH-WAY) can be removed
+        # independently to MEASURE the policy's own learned contribution.
+        #   _harvest_perception_mask: perception-gate HARVEST (default = decision_core).
+        #   _harvest_mask_off: force HARVEST always-valid (ablates the mask entirely;
+        #     the policy must LEARN not to mine when blind). Overrides the above.
+        self._harvest_perception_mask = bool(
+            config.get("harvest_perception_mask", self._decision_core)
+        )
+        self._harvest_mask_off = bool(config.get("harvest_mask_off", False))
 
     # ───── PettingZoo API ─────
     def observation_space(self, agent: str) -> DictSpace:
@@ -181,15 +192,18 @@ class AiUtopiaSimEnv(ParallelEnv):
         for agent in self.agents:
             world = self.worlds[agent]
             world.reset(int(seed), arena_mode=self._arena_mode)
-            obs[agent] = build_gatherer_obs(world, harvest_mask_on_perception=self._decision_core, resource_bearing_cue=self._resource_bearing_cue)
+            obs[agent] = build_gatherer_obs(
+                world,
+                harvest_mask_on_perception=self._harvest_perception_mask,
+                resource_bearing_cue=self._resource_bearing_cue,
+                harvest_mask_force_valid=self._harvest_mask_off,
+            )
             self._prev_phi[agent] = _log_potential(world)
         self._prev_obs = obs
         infos = {a: {} for a in self.agents}
         return obs, infos
 
-    def _dispatch_decision_core(
-        self, world: SimWorld, action: dict
-    ) -> tuple[SimWorld, dict]:
+    def _dispatch_decision_core(self, world: SimWorld, action: dict) -> tuple[SimWorld, dict]:
         """Decision-core dispatch: HARVEST -> MINE the policy-POINTED instance
         only (target_class is the slot index into g_nearest_resources); all other
         skills (NAVIGATE-explore, wait, ...) use the normal skill dynamics."""
@@ -229,19 +243,32 @@ class AiUtopiaSimEnv(ParallelEnv):
                 # (wander out -> episode dies -> the policy learns NAVIGATE is fatal
                 # -> greedy collapses to MINE-spam). Clamping lets the policy explore
                 # safely (it just stops at the wall) so NAVIGATE can be learned.
-                world.agent_pos[0] = float(np.clip(
-                    world.agent_pos[0], _ARENA_CENTER_X - self._arena_half,
-                    _ARENA_CENTER_X + self._arena_half))
-                world.agent_pos[2] = float(np.clip(
-                    world.agent_pos[2], _ARENA_CENTER_Z - self._arena_half,
-                    _ARENA_CENTER_Z + self._arena_half))
+                world.agent_pos[0] = float(
+                    np.clip(
+                        world.agent_pos[0],
+                        _ARENA_CENTER_X - self._arena_half,
+                        _ARENA_CENTER_X + self._arena_half,
+                    )
+                )
+                world.agent_pos[2] = float(
+                    np.clip(
+                        world.agent_pos[2],
+                        _ARENA_CENTER_Z - self._arena_half,
+                        _ARENA_CENTER_Z + self._arena_half,
+                    )
+                )
             else:
                 world, completion = apply_skill(world, action)
             # 2. env-step counter (one tick per step; walk-ticks NOT counted).
             world.tick += 1
 
             # 3. Build the post-step obs (byte-faithful gatherer obs adapter).
-            obs_curr = build_gatherer_obs(world, harvest_mask_on_perception=self._decision_core, resource_bearing_cue=self._resource_bearing_cue)
+            obs_curr = build_gatherer_obs(
+                world,
+                harvest_mask_on_perception=self._harvest_perception_mask,
+                resource_bearing_cue=self._resource_bearing_cue,
+                harvest_mask_force_valid=self._harvest_mask_off,
+            )
             new_obs[agent] = obs_curr
             obs_prev = self._prev_obs.get(agent, obs_curr)
 
@@ -260,9 +287,9 @@ class AiUtopiaSimEnv(ParallelEnv):
                 # intra-cluster movement (clearing a cluster moves you among trunks,
                 # often AWAY from the far cluster -> net-negative if applied always,
                 # which made the policy MINE-spam). Distance-reduction form telescopes
-                # to W·(dist at blind-start − dist at blind-end): pure "approached the
+                # to W*(dist at blind-start - dist at blind-end): pure "approached the
                 # hidden cluster while exploring" reward, zero inaction drip.
-                phi = _log_potential(world)  # = −W·dist (higher == closer)
+                phi = _log_potential(world)  # = -W*dist (higher == closer)
                 _, _nearby_now = gatherer_nearest_columns(world)
                 if not _nearby_now:  # blind: nothing visible -> guide the explore
                     rew[agent] += phi - self._prev_phi.get(agent, phi)
@@ -283,7 +310,11 @@ class AiUtopiaSimEnv(ParallelEnv):
                 dx = float(pos[0]) - _ARENA_CENTER_X
                 dz = float(pos[2]) - _ARENA_CENTER_Z
                 y = float(pos[1])
-                if (abs(dx) > self._arena_half) or (abs(dz) > self._arena_half) or (y < _ARENA_FLOOR_Y):
+                if (
+                    (abs(dx) > self._arena_half)
+                    or (abs(dz) > self._arena_half)
+                    or (y < _ARENA_FLOOR_Y)
+                ):
                     out_of_bounds = True
             trunc[agent] = (world.tick >= self.max_episode_ticks) or out_of_bounds
 

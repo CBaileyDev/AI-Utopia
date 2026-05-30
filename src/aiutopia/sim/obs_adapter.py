@@ -143,7 +143,10 @@ def gatherer_nearest_columns(
 
 
 def build_gatherer_obs(
-    world, harvest_mask_on_perception: bool = False, resource_bearing_cue: bool = False
+    world,
+    harvest_mask_on_perception: bool = False,
+    resource_bearing_cue: bool = False,
+    harvest_mask_force_valid: bool = False,
 ) -> dict:
     """Build the gatherer obs dict from SimWorld state, matching the real obs.
 
@@ -159,7 +162,13 @@ def build_gatherer_obs(
     only within REACH — because the decision-core MINE walks to the pointed
     instance. This makes greedy decode MINE a visible trunk and NAVIGATE only when
     blind (the correct explore behavior). Default False = the in-reach mask the
-    real obs / golden trace use (unchanged)."""
+    real obs / golden trace use (unchanged).
+
+    ``harvest_mask_force_valid`` (oracle-ablation, sim-only): when True, HARVEST is
+    UNCONDITIONALLY mask-valid — the perception/reach gate is removed entirely so the
+    policy must LEARN when not to mine (e.g. not when blind). This ablates the
+    load-bearing perception mask (which otherwise FORCES NAVIGATE when nothing is
+    visible). Overrides ``harvest_mask_on_perception``. Default False (unchanged)."""
     # --- spatial (GathererOverlayBuilder parity; see gatherer_nearest_columns) ---
     col_top, nearby = gatherer_nearest_columns(world)
     grid = np.zeros((2 * GRID_RADIUS, 2 * GRID_RADIUS, 6), dtype=np.float32)
@@ -197,8 +206,13 @@ def build_gatherer_obs(
         {
             "inv_slot_counts": inv_counts.tolist(),
             "target_resource_in_range": (
-                bool(nearby) if harvest_mask_on_perception
-                else nearest_res_dist <= REACH_RADIUS_BLOCKS
+                True
+                if harvest_mask_force_valid
+                else (
+                    bool(nearby)
+                    if harvest_mask_on_perception
+                    else nearest_res_dist <= REACH_RADIUS_BLOCKS
+                )
             ),
             "target_chest_in_range": nearest_chest_dist <= REACH_RADIUS_BLOCKS,
             "health": 20.0,
