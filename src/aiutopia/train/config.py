@@ -127,9 +127,12 @@ def m1_gatherer_config(
                     # M2: the POLICY drives instance-selection + blind-explore.
                     "decision_core": True,
                     # "clusters" (RANDOMIZED per seed): every episode has a blind hop,
-                    # so the explore signal stays dominant (mixed/trees DILUTED it —
-                    # trees rarely masks HARVEST so the policy learned "never explore").
-                    # Randomized cluster placement still addresses single-geometry overfit.
+                    # so the explore signal stays dominant. clusters-only + the bearing
+                    # cue = held-out 5/5 (v5). DO NOT use "mixed" — trees episodes dilute
+                    # the explore signal (the policy learns "never explore"); mixed
+                    # REGRESSED to held-out 0/5 even WITH the cue (v6). Trees is a separate
+                    # easier (no-blind-hop) layout; the decision-core's value is the
+                    # clusters blind-explore.
                     "arena_mode": "clusters",
                     "arena_half": 34.0,         # roam far enough to reach cluster B
                     "distance_shaping": True,   # blind-only PBRS guides the explore hop
