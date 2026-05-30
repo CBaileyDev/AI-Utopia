@@ -214,9 +214,14 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
         if config.get("aiutopia_root_per_worker", True) and ports:
             import os as _os
 
+            from aiutopia.common.config import per_worker_root
+
             base = _os.environ.get("AIUTOPIA_ROOT", "")
             if base:
-                _os.environ["AIUTOPIA_ROOT"] = f"{base.rstrip('/').rstrip(chr(92))}_w{widx}"
+                # IDEMPOTENT: re-instantiating this env in the same worker process
+                # must NOT compound the suffix (the _w0_w0_w0 bug that scatters
+                # Chroma/identity across phantom dirs). See per_worker_root.
+                _os.environ["AIUTOPIA_ROOT"] = per_worker_root(base, widx)
 
         self.skill_counters: dict[str, int] = {}
         self._prev_obs: dict[str, Any] = {}

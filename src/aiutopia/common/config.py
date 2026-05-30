@@ -11,6 +11,26 @@ def _env_path(name: str, default: str) -> Path:
     return Path(os.environ.get(name, default)).expanduser().resolve()
 
 
+def per_worker_root(base: str, widx: int) -> str:
+    """Append a per-worker ``_w{widx}`` suffix to an AIUTOPIA_ROOT string,
+    IDEMPOTENTLY.
+
+    Concurrent RLlib EnvRunners each get their own root (so they don't collide on
+    identity.db / Chroma). The env wrapper mutates ``os.environ["AIUTOPIA_ROOT"]``
+    in place — so a naive ``base + suffix`` COMPOUNDS across re-instantiation in the
+    same worker process (``…_w0_w0_w0…``), scattering each re-init's Chroma/identity
+    into a fresh phantom dir. This guard appends the suffix only when ``base`` does
+    not already end with it (worker_index is constant within a process, so the
+    suffix for *this* widx is the right idempotency key). Trailing ``/`` or ``\\``
+    are normalized off before the check.
+    """
+    norm = base.rstrip("/").rstrip(chr(92))
+    suffix = f"_w{widx}"
+    if norm.endswith(suffix):
+        return norm
+    return norm + suffix
+
+
 @dataclass(frozen=True)
 class Paths:
     """Resolved filesystem layout. All paths are absolute."""
