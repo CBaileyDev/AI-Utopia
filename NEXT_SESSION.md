@@ -53,6 +53,10 @@ not the skill), sim-only, staged to de-risk. **A greedy decision-core policy cle
   obs-space/RLModule change. NO behavior-cloning — the earlier "needs BC" was wrong.
 - Caveats: the cue is GROUND-TRUTH (real version needs the actual Explorer role/memory
   to produce it); trees stays OOD (~60/64 — clusters-only training); single PPO seed.
+- ⛔ **DO NOT train on "mixed" (trees+clusters)** — trees episodes dilute the explore
+  signal (the policy learns "never explore"); mixed REGRESSED to held-out 0/5 even WITH
+  the cue (v6). Train the decision-core explore on **clusters-only**. Trees is a separate
+  easier (no-blind-hop) layout — handle it as its own task if needed, not by mixing.
 - (Mixed trees+clusters training REGRESSED it — trees rarely masks HARVEST so it dilutes
   the explore signal. Train explore on clusters-only.)
 
