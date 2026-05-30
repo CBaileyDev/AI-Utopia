@@ -28,9 +28,21 @@ the full cell is running (`Research/dc_kl0_full.json`).
 
 **DESIGN FORK (yours to call — see brief):** (a) thin reactive controller + put
 intelligence in PRODUCERS (real Explorer emits the cue from partial info; keep the
-mask); (b) genuine search learning — untested, needs a stabilized trainer (kl=0)
-AND a search-requiring arena (fixed-heading must fail). Lean (a) for the immediate
-Lumberjack; (b) is the open research question. **Promotion deferred** (user-gated:
+mask); (b) genuine search learning — untested, needs a stabilized trainer AND a
+search-requiring arena (fixed-heading must fail).
+
+**External research (Kimi swarm, in `Research/okcomputer/`) CONVERGED on Fork A,
+staged to B** — and corroborates the ablation (flat RL failing long-horizon
+exploration = field consensus; the decision-core already = Plan4MC's Finding-skill;
+the mask is the correct producer→controller interface, not a crutch). Highest-leverage
+**UNGATED** next experiment (sim-only, no Java/deploy/promotion): re-run the
+decision-core with the FULL stabilization recipe (kl=0 + **entropy-decay schedule** +
+**pre-softmax FLOAT_MIN masking** + log-std clamp `[-5,2]`) + a real **Level-1 frontier
+scout** (occupancy grid + WFD, score `size/(dist+1)`) replacing the oracle cue, gated
+by the scripted-follower discriminator. NOTE our kl=0 de-confound already showed kl=0
+ALONE is insufficient → the lever is entropy-annealing+masking, untested. Then RE3
+(dim64,k=4) or `(x,z)` count bonus. Full synthesis + falsifiable criteria in
+`Research/MORNING_BRIEF.md` §"External research synthesis". **Promotion deferred** (user-gated:
 ambiguous checkpoint + unmeetable §5.10 + deploy-adjacent). **Phase D Java scoped,
 NOT built** (`docs/.../2026-05-29-phase-d-decision-core-java-scoping.md`;
 build/deploy/restart reserved for you).

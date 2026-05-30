@@ -130,6 +130,76 @@ goal is "a working village" (a) or "agents that genuinely learn" (b).
 
 ---
 
+## External research synthesis (Kimi swarm, 2026-05-30) — converges on Fork A, staged to B
+
+You ran a research swarm; output is in `Research/okcomputer/` (final report
+`ai_utopia_exploration_report.agent.final.md`, 11 dimension deep-dives under
+`research/`, synthesis in `…_sec04.md`, insights in `research/ai_utopia_insight.md`).
+It independently lands on **Fork A with a staged path to B** — and corroborates the
+ablation rather than contradicting it. Key points (their confidence in brackets):
+
+- **The ablation validates the architecture, doesn't condemn it [High].** "Flat RL
+  underperforms scripted/hybrid controllers on long-horizon sparse-reward
+  navigation" is the established field consensus (MineRL BASALT winners, DreamerV3,
+  Plan4MC). We rediscovered a known limit, not a novel failure — the solution space
+  is mapped.
+- **The decision-core already IS the right mechanism [High].** It matches Plan4MC's
+  "Finding-skill" (a high-level policy that emits a goal for a low-level
+  controller). It needs a *producer* + a *stabilized trainer*, not a redesign. The
+  perception mask is the **correct producer→controller interface**, not a crutch —
+  drive it from a real scout's bearings instead of the hardcoded oracle.
+- **Field consensus (5 dimensions converge) [High]:** high-level goal producer →
+  mid-level bearing/waypoint → low-level reactive controller. Fork A = that
+  consensus.
+- **Fork B / BC-from-the-follower is weak [Medium]:** BC from the scripted follower
+  just memorizes the follower (matches our own discriminator + the advisor's
+  "cloning the oracle"). Genuine end-to-end search needs intrinsic motivation +
+  hierarchy or real human demos — a real scope increase, and learned exploration is
+  fragile sim→real.
+- **Staged hybrid is highest-ROI [Medium]:** build Fork A now; its explorer
+  trajectories become Fork B's BC warm-start data later. Forks aren't exclusive.
+
+**Concrete staged plan they recommend** (sim-only, fast-sim-friendly):
+1. *Week 1–2 — stabilize PPO + Level-1 scout.* `kl_coeff=0`, **mask logits
+   pre-softmax (FLOAT_MIN)**, **entropy-decay schedule `[[0,0.01],[1e6,0.001]]`**,
+   log-std clamp `[-5,2]`, `grad_clip=0.5`. Scout = 2D occupancy grid (sparse
+   hash-map) + Wavefront Frontier Detection, scoring frontiers `size/(dist+1)`,
+   emitting the top centroid as a bearing (NO learning — clean sim→real).
+2. *Week 3–6 — light exploration bonus + collect demos.* RE3 (fixed random encoder
+   dim 64, k=4, ~1.05× overhead) or `(x,z)` count `β=0.01/√N`. Both trivial, proven
+   on MiniGrid.
+3. *Week 6+ — BC→PPO* (two-phase critic warmup) toward Fork B, only once Fork A has
+   produced rich-coverage trajectories.
+
+**Falsifiable success criteria (theirs, good):** Fork A wins if stabilized PPO +
+real frontier bearings trains stably (finite KL, no seed collapse) and **exceeds the
+scripted-follower baseline** on held-out geometries. Fork B wins if RE3+stabilized
+PPO on a *search-requiring* arena (fixed-heading must fail) beats the follower on
+3+ seeds. If Fork A can't beat the follower even with a real scout, the arena may
+lack learnable structure.
+
+### ⚠️ Reconciliation with our own data (don't take the recipe at face value)
+The research bullet "PPO instability is a 3-line fix: just `kl_coeff=0`" is **too
+strong, and we already half-falsified it**: the kl=0 de-confound reproduced the
+{5,0,5} collapse *exactly* (§ KL de-confound above). BUT we only tested the *kl*
+piece — NOT the entropy-decay schedule or pre-softmax masking. And our measured
+failure mode (return oscillates, **entropy pinned ~12, never anneals**) is precisely
+what an entropy-decay schedule + proper masking address. So data and research are
+consistent: the lever is **entropy annealing + masking, not the KL term**. The honest
+first experiment is the **FULL recipe**, watching whether entropy actually decays and
+return converges — not just whether kl=0 was set. Clean, cheap, sim-only; does NOT
+need the user-gated Java/deploy/promotion.
+
+### Updated recommendation (research + our data now agree)
+Lean **Fork A, staged to B** — strengthened from "weak" to corroborated by external
+consensus *and* consistent with our ablation. Highest-leverage, fully **ungated**
+next experiment: re-run the decision-core with the **full** stabilization recipe
+(kl=0 + entropy-decay + pre-softmax masking + log-std clamp) and a real Level-1
+frontier scout replacing the oracle cue, then gate it through the scripted-follower
+discriminator on held-out geometries. Still your call — but the evidence converged.
+
+---
+
 ## Two queued items, both deferred to you (not done unattended)
 
 **Promotion / M1B-verified tag (§5.10) — DEFERRED, user-gated.** Findings:
