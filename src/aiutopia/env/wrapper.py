@@ -128,11 +128,11 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
 
     def __init__(self, config: dict[str, Any]):
         self.cfg = config
-        self.active_roles = list(config["active_roles"])
+        self.active_roles = list(config.get("active_roles", ["gatherer"]))
         self.agents_init = [f"{r}_0" for r in self.active_roles]
         self.possible_agents = list(self.agents_init)
         self.agents: list[str] = []
-        self.stage = int(config["stage"])
+        self.stage = int(config.get("stage", 1))
         self.tick_warp = bool(config.get("tick_warp", False))
         self.max_ticks = int(config.get("max_episode_ticks", 6_000))
         self._tick = 0
@@ -177,7 +177,7 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
         }
 
         # Pick port from worker index (defaults to first port for tests).
-        ports = config["py4j_ports"]
+        ports = config.get("py4j_ports", [25100])
         widx = int(getattr(config, "worker_index", config.get("worker_index", 0))) % len(ports)
         self.bridge = FabricBridge(port=ports[widx])
         self.bridge.open()
@@ -538,14 +538,36 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
 
     # ───── helpers ─────
     def _read_all_obs(self) -> dict[str, dict]:
-        raw_all = self.bridge.observations_all()
+        """Read observations for all active agents, dispatching by role.
+
+        Java side: If role-specific obs methods exist (observationsGatherer, observationsExplorer,
+        observationsFarmer), uses them. Otherwise falls back to observations_all() (Gatherer-only).
+        """
         out: dict[str, dict] = {}
         for agent in self.agents:
-            # R6: Java keys obs by Carpet player_name, not env agent_id.
+            role = _role_of(agent)
             player_name = self.agent_id_to_player_name.get(agent, agent)
-            raw = _normalize_raw(raw_all.get(player_name, {}))
-            mask = compute_gatherer_action_mask(raw) if _role_of(agent) == "gatherer" else {}
-            out[agent] = _decode_obs(raw, _role_of(agent), self.stage, mask, self._stub_goal_embed)
+
+            # Try role-specific method first (requires Java 2b+ with multi-role obs builders)
+            raw = {}
+            try:
+                if role == "gatherer" and hasattr(self.bridge.entry_point, "observationsGatherer"):
+                    raw = self.bridge.entry_point.observationsGatherer(player_name) or {}
+                elif role == "explorer" and hasattr(self.bridge.entry_point, "observationsExplorer"):
+                    raw = self.bridge.entry_point.observationsExplorer(player_name) or {}
+                elif role == "farmer" and hasattr(self.bridge.entry_point, "observationsFarmer"):
+                    raw = self.bridge.entry_point.observationsFarmer(player_name) or {}
+            except Exception:
+                pass  # Fallback to batch below
+
+            # Fallback: batch observations_all (current Java, Gatherer-only)
+            if not raw:
+                raw_all = self.bridge.observations_all()
+                raw = raw_all.get(player_name, {})
+
+            raw = _normalize_raw(raw)
+            mask = compute_gatherer_action_mask(raw) if role == "gatherer" else {}
+            out[agent] = _decode_obs(raw, role, self.stage, mask, self._stub_goal_embed)
         return out
 
     def _next_seed_for_strategy(self) -> int:
