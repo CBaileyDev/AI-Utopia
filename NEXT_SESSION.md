@@ -50,6 +50,16 @@ build/deploy/restart reserved for you).
 Commits this run: `bf89c97` (AIUTOPIA_DATA_DIR), `7ad92c4` (decouple mask/cue),
 `c48af03` (dc_ablation harness), `3c20f83` (Phase D scoping), + this handoff.
 
+**🔧 Foundation hardening (2026-05-30, same run) — 3 over-claim-proof commits.** After
+banking the scout findings, pivoted (advisor-endorsed) off the gameable toy to harden the
+proven foundation: `88ad342` fixed the documented `_w0_w0_w0` per-worker-root compounding
+bug (idempotent `common.config.per_worker_root` + 4 tests); `38d18c7` covered the
+AIUTOPIA_DATA_DIR corruption-safety layout (untested at ship); `67d1520` covered
+`_greedy_decode`'s mask-aware skill_type path (eval-critical, was the N22 confusion
+source). Suite 231→238 green. The next high-value work is the gated D1–D4 decisions in
+`Research/M2_ROADMAP_AND_DECISIONS.md` (my rec: D3 Lumberjack→real-survival recon, but it's
+a server/world-gen lift — scope before committing).
+
 **⚡ 12h-autonomous-run update (2026-05-30) — scout built; "validated" WITHDRAWN.**
 Built a partial-info `FrontierScout` + a decisive no-training follower test
 (`scripts/dc_scout_follower.py`). Findings: (a) the old `clusters` arena was
