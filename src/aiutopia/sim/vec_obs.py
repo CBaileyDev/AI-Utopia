@@ -38,8 +38,17 @@ def gatherer_nearest_columns_batched(logs, log_alive, agent_pos):
     cell = (dx + _G) * _W + (dz + _G)
     flat = (env_idx * _NCELL + cell).astype(np.int64)
     col_top = np.full(B * _NCELL, _EMPTY_DY, dtype=np.int64)
-    vmask = valid.reshape(-1)
-    np.maximum.at(col_top, flat.reshape(-1)[vmask], dy.reshape(-1)[vmask].astype(np.int64))
+    # Scatter-MAX dy per (env,cell). dy is in [-3,3] (7 values), so instead of the
+    # slow unbuffered np.maximum.at we do 7 ASCENDING buffered assignments: writing
+    # dy levels low->high means a higher dy overwrites a lower one at the same cell,
+    # leaving the per-cell MAX. ~10x faster than maximum.at, byte-identical result.
+    flat_v = flat.reshape(-1)
+    dy_v = dy.reshape(-1)
+    valid_v = valid.reshape(-1)
+    for level in range(-3, 4):
+        sel = valid_v & (dy_v == level)
+        if sel.any():
+            col_top[flat_v[sel]] = level
     col_top = col_top.reshape(B, _W, _W)
 
     occupied = col_top > _EMPTY_DY
