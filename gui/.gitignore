@@ -1,0 +1,15 @@
+node_modules
+dist
+dist-ssr
+
+# Tauri (Rust) build artifacts — the compiled exe/installer live here
+src-tauri/target/
+src-tauri/gen/schemas/
+*.local
+.vite
+.DS_Store
+TRASH/
+.preview-*.png
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

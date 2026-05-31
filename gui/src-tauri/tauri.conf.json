@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AI Utopia",
+  "version": "0.1.0",
+  "identifier": "com.aiutopia.controlcenter",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "AI Utopia — Control Center",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 940,
+        "minHeight": 600,
+        "resizable": true,
+        "center": true,
+        "decorations": false,
+        "transparent": false,
+        "theme": "Dark",
+        "backgroundColor": "#020204"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

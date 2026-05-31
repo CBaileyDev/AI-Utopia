@@ -1,0 +1,1740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Utopia — Control Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@300;400;500;600&family=Geist:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --void:#030305; --abyss:#08080F; --surface:#11111A; --surface-2:#0d0d15;
+    --elevated:#181824; --border-subtle:#222233; --border-active:#334466;
+    --text-primary:#E8E8F0; --text-secondary:#7A7A99; --text-tertiary:#4A4A66;
+    --accent-cyan:#00E5CC; --accent-lavender:#B07CFF;
+    --status-training:#FFB800; --status-offline:#FF4466;
+    --ease:cubic-bezier(0.16,1,0.3,1);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { height:100%; }
+  body {
+    background:#020204;
+    color:var(--text-primary);
+    font-family:'Geist Mono','SF Mono',ui-monospace,monospace;
+    font-size:12px; line-height:1.5;
+    -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+    overflow:hidden;
+  }
+  ::selection { background:rgba(0,229,204,0.25); color:var(--text-primary); }
+  ::-webkit-scrollbar { width:6px; height:6px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:#2a2a3a; border-radius:3px; }
+  ::-webkit-scrollbar-thumb:hover { background:var(--accent-cyan); }
+  input, select, textarea, button { font-family:inherit; }
+
+  /* ---------- Desktop backdrop ---------- */
+  .desktop {
+    position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    padding:22px;
+    background:
+      radial-gradient(900px 500px at 22% 0%, rgba(0,229,204,0.06), transparent 60%),
+      radial-gradient(900px 600px at 100% 100%, rgba(176,124,255,0.06), transparent 55%),
+      #020204;
+  }
+  .desktop::before {
+    content:''; position:absolute; inset:0; pointer-events:none; opacity:0.5;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px);
+    background-size:44px 44px;
+    -webkit-mask-image:radial-gradient(circle at 50% 40%, #000, transparent 80%);
+            mask-image:radial-gradient(circle at 50% 40%, #000, transparent 80%);
+  }
+
+  /* ---------- App window ---------- */
+  .app-window {
+    position:relative; width:100%; max-width:1500px; height:100%; max-height:980px;
+    display:flex; flex-direction:column;
+    background:linear-gradient(180deg, #0a0a12, var(--void) 30%);
+    border:1px solid #1c1c2a; border-radius:14px; overflow:hidden;
+    box-shadow:0 40px 120px -20px rgba(0,0,0,0.9), 0 0 0 1px rgba(255,255,255,0.02),
+               inset 0 1px 0 rgba(255,255,255,0.04);
+    animation:window-in 0.7s var(--ease) both;
+  }
+  @keyframes window-in { from { transform:translateY(14px) scale(0.992); } to { transform:none; } }
+
+  .app-window::after { /* ambient aurora inside content */
+    content:''; position:absolute; inset:0; pointer-events:none; z-index:0;
+    background:radial-gradient(700px 360px at 80% -8%, rgba(0,229,204,0.05), transparent 60%);
+  }
+
+  /* ---------- Title bar ---------- */
+  .titlebar {
+    position:relative; z-index:3; flex-shrink:0;
+    height:52px; display:flex; align-items:center; justify-content:space-between;
+    padding:0 16px 0 18px;
+    border-bottom:1px solid rgba(34,34,51,0.6);
+    background:linear-gradient(180deg, rgba(20,20,30,0.7), rgba(8,8,15,0.2));
+    -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+  }
+  .brand { display:flex; align-items:center; gap:13px; }
+  .diamond {
+    width:26px; height:26px; transform:rotate(45deg); border-radius:7px;
+    background:linear-gradient(135deg, #00E5CC, #00b8a4);
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
+    box-shadow:0 0 18px rgba(0,229,204,0.4), inset 0 1px 2px rgba(255,255,255,0.4);
+  }
+  .diamond span { transform:rotate(-45deg); color:#03110f; font-weight:700; font-size:12px; font-family:'Geist',sans-serif; }
+  .wordmark { font-family:'Geist',sans-serif; font-weight:600; font-size:16px; letter-spacing:0.14em; color:var(--text-primary); }
+  .wordmark b { color:var(--accent-cyan); font-weight:600; }
+  .brand-sub { font-size:9px; letter-spacing:0.22em; color:var(--text-tertiary); text-transform:uppercase; margin-top:1px; }
+
+  .win-ctrls { display:flex; align-items:center; gap:10px; }
+  .win-meta { display:flex; align-items:center; gap:14px; margin-right:6px; }
+  .bridge-pill {
+    display:flex; align-items:center; gap:7px; height:26px; padding:0 11px; border-radius:999px;
+    background:rgba(0,229,204,0.07); border:1px solid rgba(0,229,204,0.2);
+  }
+  .bridge-pill span.lbl { color:var(--accent-cyan); font-weight:500; font-size:10px; letter-spacing:0.08em; }
+  .win-btn {
+    width:30px; height:30px; border-radius:8px; border:1px solid transparent; background:transparent;
+    color:var(--text-secondary); display:flex; align-items:center; justify-content:center; cursor:pointer;
+    transition:all 0.2s var(--ease);
+  }
+  .win-btn:hover { background:rgba(255,255,255,0.06); color:var(--text-primary); }
+  .win-btn.close:hover { background:rgba(255,68,102,0.16); color:#FF4466; }
+  .win-btn svg { pointer-events:none; }
+
+  /* ---------- Tab bar ---------- */
+  .tabbar {
+    position:relative; z-index:3; flex-shrink:0; display:flex; align-items:center; gap:2px;
+    padding:0 16px; height:46px;
+    border-bottom:1px solid var(--border-subtle);
+    background:rgba(8,8,15,0.4);
+  }
+  .tab {
+    position:relative; height:46px; padding:0 18px; background:transparent; border:none; cursor:pointer;
+    display:flex; align-items:center; gap:8px; color:var(--text-secondary);
+    font-size:12.5px; letter-spacing:0.02em; transition:color 0.2s var(--ease);
+  }
+  .tab:hover { color:var(--text-primary); }
+  .tab.active { color:var(--text-primary); }
+  .tab .tab-ico { opacity:0.55; transition:opacity 0.2s, color 0.2s; }
+  .tab.active .tab-ico { opacity:1; color:var(--accent-cyan); }
+  .tab-indicator {
+    position:absolute; bottom:-1px; height:2px; border-radius:2px;
+    background:linear-gradient(90deg, transparent, var(--accent-cyan), transparent);
+    box-shadow:0 0 12px var(--accent-cyan);
+    transition:left 0.4s var(--ease), width 0.4s var(--ease);
+  }
+  .tab-glow {
+    position:absolute; bottom:0; height:30px; border-radius:50%;
+    background:radial-gradient(ellipse at bottom, rgba(0,229,204,0.18), transparent 70%);
+    transition:left 0.4s var(--ease), width 0.4s var(--ease); pointer-events:none;
+  }
+
+  /* ---------- Content ---------- */
+  .content {
+    position:relative; z-index:1; flex:1; overflow-y:auto; overflow-x:hidden;
+    padding:26px 30px 30px;
+  }
+  .content-inner { max-width:1340px; margin:0 auto; }
+  .grid12 { display:grid; grid-template-columns:repeat(12,1fr); gap:14px; }
+
+  /* ---------- Status bar ---------- */
+  .statusbar {
+    position:relative; z-index:3; flex-shrink:0; height:30px;
+    display:flex; align-items:center; gap:18px; padding:0 18px;
+    border-top:1px solid var(--border-subtle);
+    background:rgba(8,8,15,0.6); font-size:10px; color:var(--text-tertiary); letter-spacing:0.04em;
+  }
+  .statusbar .si { display:flex; align-items:center; gap:6px; }
+  .statusbar .spacer { flex:1; }
+
+  /* ---------- Typography ---------- */
+  .t-hero { font-family:'Geist',sans-serif; font-size:26px; font-weight:500; line-height:1.15; letter-spacing:-0.02em; color:var(--text-primary); }
+  .t-section { font-size:12px; font-weight:600; letter-spacing:0.12em; text-transform:uppercase; color:var(--text-secondary); }
+  .t-body { font-size:12px; color:var(--text-secondary); }
+  .t-caption { font-size:10px; color:var(--text-tertiary); letter-spacing:0.02em; }
+  .t-data { font-family:'Geist',sans-serif; font-size:26px; font-weight:300; line-height:1; color:var(--text-primary); font-variant-numeric:tabular-nums; letter-spacing:-0.01em; }
+  .t-code { font-size:11px; color:var(--accent-cyan); font-family:'Geist Mono',monospace; }
+  .t-label { font-size:10px; font-weight:500; text-transform:uppercase; letter-spacing:0.08em; color:var(--text-tertiary); }
+
+  /* ---------- Cards ---------- */
+  .card { position:relative; background:linear-gradient(180deg, rgba(255,255,255,0.012), transparent), var(--surface); border:1px solid var(--border-subtle); border-radius:11px; }
+  .card-elevated { background:var(--elevated); }
+  .card-hover { transition:border-color 0.3s var(--ease), box-shadow 0.3s var(--ease), transform 0.3s var(--ease); }
+  .card-hover:hover { border-color:var(--border-active); box-shadow:0 8px 30px -12px rgba(0,0,0,0.7), 0 0 24px rgba(0,229,204,0.04); }
+
+  /* ---------- Controls ---------- */
+  .toggle { position:relative; width:34px; height:18px; border-radius:999px; border:none; cursor:pointer; transition:background 0.25s var(--ease), box-shadow 0.25s; }
+  .toggle-knob { position:absolute; top:2px; width:14px; height:14px; border-radius:999px; background:#fff; transition:left 0.25s var(--ease); box-shadow:0 1px 3px rgba(0,0,0,0.4); }
+  input.range { -webkit-appearance:none; appearance:none; flex:1; height:4px; border-radius:999px; outline:none; cursor:pointer; }
+  input.range::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:999px; background:#fff; border:2px solid var(--accent-cyan); box-shadow:0 0 8px rgba(0,229,204,0.5); cursor:pointer; transition:transform 0.15s; }
+  input.range::-webkit-slider-thumb:hover { transform:scale(1.18); }
+  input.range::-moz-range-thumb { width:14px; height:14px; border-radius:999px; background:#fff; border:2px solid var(--accent-cyan); cursor:pointer; }
+
+  .segmented { display:flex; gap:4px; background:var(--surface-2); border:1px solid var(--border-subtle); border-radius:9px; padding:3px; }
+  .segmented-btn { flex:1; height:28px; padding:0 12px; border:none; border-radius:6px; cursor:pointer; font-size:11px; transition:all 0.2s var(--ease); white-space:nowrap; }
+  .segmented-btn:hover { color:var(--text-primary); }
+
+  .role-badge { display:inline-flex; align-items:center; gap:6px; height:22px; padding:0 10px; border-radius:999px; font-size:10px; font-weight:500; }
+
+  .ghost-btn {
+    display:inline-flex; align-items:center; justify-content:center; gap:7px;
+    height:36px; padding:0 16px; border-radius:9px; cursor:pointer; font-size:11.5px;
+    background:transparent; border:1px solid color-mix(in srgb, var(--bc) 32%, transparent); color:var(--bc);
+    transition:all 0.2s var(--ease);
+  }
+  .ghost-btn:hover { background:color-mix(in srgb, var(--bc) 10%, transparent); box-shadow:0 0 18px color-mix(in srgb, var(--bc) 18%, transparent); }
+  .ghost-btn:active { transform:scale(0.98); }
+
+  .fill-btn {
+    display:inline-flex; align-items:center; justify-content:center; gap:7px; height:36px; padding:0 18px;
+    border-radius:9px; border:none; cursor:pointer; font-size:11.5px; font-weight:600;
+    background:var(--accent-cyan); color:var(--void); transition:all 0.2s var(--ease);
+  }
+  .fill-btn:hover { filter:brightness(1.08); box-shadow:0 0 22px rgba(0,229,204,0.3); }
+  .fill-btn:active { transform:scale(0.98); }
+
+  .inp {
+    height:36px; padding:0 12px; border-radius:9px; font-size:11.5px; outline:none;
+    background:var(--surface-2); border:1px solid var(--border-subtle); color:var(--text-primary);
+    transition:border-color 0.2s, box-shadow 0.2s;
+  }
+  .inp:focus { border-color:rgba(0,229,204,0.4); box-shadow:0 0 0 3px rgba(0,229,204,0.08); }
+  textarea.inp { height:auto; padding:10px 12px; resize:vertical; line-height:1.6; }
+  select.inp { cursor:pointer; }
+
+  .soft { background:var(--surface-2); border:1px solid var(--border-subtle); border-radius:9px; }
+
+  /* ---------- Utilities ---------- */
+  .flex { display:flex; } .flex-col { flex-direction:column; } .flex-1 { flex:1; }
+  .items-center { align-items:center; } .items-start { align-items:flex-start; } .items-end { align-items:flex-end; }
+  .justify-between { justify-content:space-between; } .justify-center { justify-content:center; }
+  .justify-end { justify-content:flex-end; } .justify-start { justify-content:flex-start; }
+  .wrap { flex-wrap:wrap; }
+  .truncate { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .capitalize { text-transform:capitalize; }
+  .relative { position:relative; }
+  .full { width:100%; }
+  .mono { font-family:'Geist Mono',monospace; }
+
+  /* ---------- Animations ---------- */
+  .reveal { animation:reveal 0.55s var(--ease) both; }
+  @keyframes reveal { from { transform:translateY(14px); } to { transform:none; } }
+  .tab-fade { animation:tabfade 0.34s var(--ease) both; }
+  @keyframes tabfade { from { transform:translateY(7px); } to { transform:none; } }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .spin { animation:spin 1.1s linear infinite; }
+  .pulse-dot-soft { animation:pulseSoft 2.2s ease-in-out infinite; }
+  @keyframes pulseSoft { 0%,100% { opacity:1; } 50% { opacity:0.45; } }
+  .pulse-dot { animation:pulseDot 1.8s ease-in-out infinite; transform-origin:center; }
+  @keyframes pulseDot { 0%,100% { r:3.5; opacity:1; } 50% { r:5; opacity:0.7; } }
+  @keyframes ringPing { 0% { transform:scale(1); opacity:0.6; } 100% { transform:scale(1.8); opacity:0; } }
+  .line-draw { }
+  @keyframes blink { 0%,100% { opacity:0.25; } 50% { opacity:1; } }
+
+  @media (max-width:1100px) { .content { padding:20px; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script>
+/* AI Utopia — shared mock data + design helpers (plain global script) */
+(function () {
+  const roleColors = {
+    gatherer: '#00E5CC',
+    builder: '#B07CFF',
+    farmer: '#66BB6A',
+    defender: '#EF5350',
+  };
+
+  const roleMeta = {
+    gatherer: { label: 'Gatherer', icon: 'axe' },
+    builder: { label: 'Builder', icon: 'hammer' },
+    farmer: { label: 'Farmer', icon: 'wheat' },
+    defender: { label: 'Defender', icon: 'shield' },
+  };
+
+  const agents = [
+    { id: '1', name: 'Oak', role: 'gatherer', status: 'alive', uuid: '01HABCDE1234567890ABCDEF', skin: 'Default Villager', born: '2026-05-26T14:23:00Z', x: 142, z: -89, rewards: 342, health: 20, hunger: 18 },
+    { id: '2', name: 'Stone', role: 'builder', status: 'training', uuid: '01HABCDE1234567890ABCDF0', skin: 'Steve Variant', born: '2026-05-27T09:15:00Z', x: 89, z: 45, rewards: 198, health: 20, hunger: 16 },
+    { id: '3', name: 'Wheat', role: 'farmer', status: 'alive', uuid: '01HABCDE1234567890ABCDF1', skin: 'Alex Variant', born: '2026-05-28T16:42:00Z', x: -34, z: 120, rewards: 156, health: 18, hunger: 20 },
+    { id: '4', name: 'Iron', role: 'defender', status: 'idle', uuid: '01HABCDE1234567890ABCDF2', skin: 'Default Villager', born: '2026-05-29T11:08:00Z', x: 200, z: -150, rewards: 98, health: 20, hunger: 14 },
+  ];
+
+  const logs = [
+    { id: '1', timestamp: '14:32:15', type: 'AGENT', message: 'Oak collected 12 oak_log at (142, 64, -89)' },
+    { id: '2', timestamp: '14:32:10', type: 'TRAIN', message: 'Epoch 1247 complete — mean reward +2.14' },
+    { id: '3', timestamp: '14:32:05', type: 'CHAT', message: "@Oak What are you working on? → 'Gathering wood for the village stockpile'" },
+    { id: '4', timestamp: '14:31:58', type: 'SYSTEM', message: 'Py4J bridge heartbeat confirmed (12ms)' },
+    { id: '5', timestamp: '14:31:45', type: 'AGENT', message: 'Stone placed 8 stone_bricks at village center (89, 64, 45)' },
+    { id: '6', timestamp: '14:31:32', type: 'AGENT', message: 'Wheat harvested 6 wheat at farm plot (-34, 64, 120)' },
+    { id: '7', timestamp: '14:31:20', type: 'TRAIN', message: 'Policy loss 0.0047 (down 12% from prev)' },
+    { id: '8', timestamp: '14:31:15', type: 'SYSTEM', message: 'Memory compaction complete — 847 entries archived' },
+    { id: '9', timestamp: '14:31:02', type: 'AGENT', message: 'Iron patrolling perimeter at (200, 70, -150)' },
+    { id: '10', timestamp: '14:30:48', type: 'CHAT', message: "@Stone Need more stone → 'On it, mining at depth 32'" },
+    { id: '11', timestamp: '14:30:31', type: 'TRAIN', message: 'KL divergence 0.0021 within trust region' },
+    { id: '12', timestamp: '14:30:12', type: 'AGENT', message: 'Oak deposited 64 oak_log into village chest' },
+  ];
+
+  const epochs = Array.from({ length: 24 }, (_, i) => ({
+    epoch: 1247 - i,
+    meanReward: 2.14 + Math.sin(i * 0.3) * 0.4 - i * 0.01,
+    policyLoss: 0.0047 + Math.cos(i * 0.5) * 0.001,
+    valueLoss: 0.0089 + Math.sin(i * 0.4) * 0.002,
+    entropy: 0.312 + Math.cos(i * 0.3) * 0.05,
+    klDiv: 0.0021 + Math.sin(i * 0.6) * 0.0005,
+    duration: (12 + Math.floor((Math.sin(i * 1.3) + 1) * 4)) + 's',
+    status: (['improved', 'stable', 'degraded'])[Math.abs(Math.round(Math.sin(i * 2.1) * 1.4)) % 3],
+  }));
+
+  // Deterministic-ish activity timeline (avoid re-randomizing on every render)
+  const activity = Array.from({ length: 14 }, (_, i) => {
+    const hour = 14 - Math.floor((13 - i) / 2);
+    const min = ((13 - i) % 2) * 30;
+    const s = (n, p) => 4 + Math.round((Math.sin(i * 0.5 + p) + 1) * n);
+    return {
+      time: `${String(hour).padStart(2, '0')}:${min === 0 ? '00' : min}`,
+      gatherer: s(7, 0), builder: s(5, 1.4), farmer: s(4, 2.6), defender: s(3, 3.9),
+    };
+  });
+
+  const rewardCurve = Array.from({ length: 120 }, (_, i) => ({
+    epoch: 1128 + i,
+    reward: 1.45 + Math.sin(i * 0.09) * 0.28 + (i / 120) * 0.85 + Math.sin(i * 0.7) * 0.06,
+    baseline: 1.8,
+  }));
+
+  window.AIU = {
+    roleColors,
+    roleMeta,
+    getRoleColor: (r) => roleColors[r] || '#7A7A99',
+    agents,
+    logs,
+    epochs,
+    activity,
+    rewardCurve,
+    statusColor: {
+      alive: '#00E5CC', training: '#FFB800', idle: '#7A7A99', offline: '#FF4466',
+    },
+  };
+})();
+
+</script>
+<script type="text/babel" data-presets="react">
+/* === lib === */
+/* AI Utopia — icon set (lucide paths, MIT). window.Icon */
+const ICON_PATHS = {
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  brain: '<path d="M12 5a3 3 0 1 0-5.997.142 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.142 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>',
+  database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  up: '<path d="m6 9 6-6 6 6"/><path d="M6 9v6a6 6 0 0 0 6 6"/>',
+  down: '<path d="m18 15-6 6-6-6"/><path d="M18 15V9a6 6 0 0 0-6-6"/>',
+  trendUp: '<polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>',
+  trendDown: '<polyline points="22 17 13.5 8.5 8.5 13.5 2 7"/><polyline points="16 17 22 17 22 11"/>',
+  minus: '<path d="M5 12h14"/>',
+  axe: '<path d="m14 12-8.5 8.5a2.12 2.12 0 1 1-3-3L11 9"/><path d="M15 13 9 7l4-4 6 6h3a8 8 0 0 1-7 7z"/>',
+  hammer: '<path d="m15 12-8.373 8.373a1 1 0 1 1-3-3L12 9"/><path d="m18 15 4-4"/><path d="m21.5 11.5-1.914-1.914A2 2 0 0 1 19 8.172V7l-2.26-2.26a6 6 0 0 0-4.202-1.756L9 2.96l.92.82A6.18 6.18 0 0 1 12 8.4V10l2 2h1.172a2 2 0 0 1 1.414.586z"/>',
+  wheat: '<path d="M2 22 16 8"/><path d="M3.47 12.53 5 11l1.53 1.53a3.5 3.5 0 0 1 0 4.94L5 19l-1.53-1.53a3.5 3.5 0 0 1 0-4.94Z"/><path d="M7.47 8.53 9 7l1.53 1.53a3.5 3.5 0 0 1 0 4.94L9 15l-1.53-1.53a3.5 3.5 0 0 1 0-4.94Z"/><path d="M11.47 4.53 13 3l1.53 1.53a3.5 3.5 0 0 1 0 4.94L13 11l-1.53-1.53a3.5 3.5 0 0 1 0-4.94Z"/><path d="M20 2h2v2a4 4 0 0 1-4 4h-2V6a4 4 0 0 1 4-4Z"/><path d="M11.47 17.47 13 19l-1.53 1.53a3.5 3.5 0 0 1-4.94 0L5 19l1.53-1.53a3.5 3.5 0 0 1 4.94 0Z"/><path d="M15.47 13.47 17 15l-1.53 1.53a3.5 3.5 0 0 1-4.94 0L9 15l1.53-1.53a3.5 3.5 0 0 1 4.94 0Z"/><path d="M19.47 9.47 21 11l-1.53 1.53a3.5 3.5 0 0 1-4.94 0L13 11l1.53-1.53a3.5 3.5 0 0 1 4.94 0Z"/>',
+  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>',
+  userX: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="17" x2="22" y1="8" y2="13"/><line x1="22" x2="17" y1="8" y2="13"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  loader: '<line x1="12" x2="12" y1="2" y2="6"/><line x1="12" x2="12" y1="18" y2="22"/><line x1="4.93" x2="7.76" y1="4.93" y2="7.76"/><line x1="16.24" x2="19.07" y1="16.24" y2="19.07"/><line x1="2" x2="6" y1="12" y2="12"/><line x1="18" x2="22" y1="12" y2="12"/><line x1="4.93" x2="7.76" y1="19.07" y2="16.24"/><line x1="16.24" x2="19.07" y1="7.76" y2="4.93"/>',
+  circle: '<circle cx="12" cy="12" r="10"/>',
+  pause: '<rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/>',
+  play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+  save: '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/>',
+  trophy: '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>',
+  stop: '<path d="m2.45 7.4 5.18-5.18a1 1 0 0 1 .71-.29h7.39a1 1 0 0 1 .71.29l5.18 5.18a1 1 0 0 1 .29.71v7.39a1 1 0 0 1-.29.71l-5.18 5.18a1 1 0 0 1-.71.29H8.34a1 1 0 0 1-.71-.29L2.45 16.5a1 1 0 0 1-.29-.71V8.11a1 1 0 0 1 .29-.71z"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>',
+  zoomIn: '<circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/><line x1="11" x2="11" y1="8" y2="14"/><line x1="8" x2="14" y1="11" y2="11"/>',
+  zoomOut: '<circle cx="11" cy="11" r="8"/><line x1="21" x2="16.65" y1="21" y2="16.65"/><line x1="8" x2="14" y1="11" y2="11"/>',
+  grid: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/>',
+  send: '<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/>',
+  message: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
+  server: '<rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
+  cpu: '<rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/>',
+  folder: '<path d="M6 14a2 2 0 0 0 2-2V8a2 2 0 0 1 2-2h2.343a2 2 0 0 1 1.414.586l.828.828A2 2 0 0 0 16 8h2a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2z"/><path d="M2 8a2 2 0 0 1 2-2h2.343a2 2 0 0 1 1.414.586l.828.828A2 2 0 0 0 10 8h6"/>',
+  alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/>',
+  gear: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  activity: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  sparkles: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/>',
+  map: '<path d="M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z"/><path d="M15 5.764v15"/><path d="M9 3.236v15"/>',
+  chevron: '<path d="m9 18 6-6-6-6"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  layers: '<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/>',
+  target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  pulse: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  network: '<rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/>',
+};
+
+function Icon({ name, size = 16, stroke = 1.5, fill = 'none', style = {}, className = '' }) {
+  const d = ICON_PATHS[name];
+  if (!d) return null;
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg" width={size} height={size}
+      viewBox="0 0 24 24" fill={fill} stroke="currentColor"
+      strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round"
+      className={className} style={style}
+      dangerouslySetInnerHTML={{ __html: d }}
+    />
+  );
+}
+
+window.Icon = Icon;
+
+
+/* AI Utopia — lightweight SVG charts. window.AreaStack, Donut, LineChart, Sparkline */
+
+function buildPath(points) {
+  if (!points.length) return '';
+  // smooth catmull-rom -> bezier
+  const p = points;
+  let d = `M ${p[0].x} ${p[0].y}`;
+  for (let i = 0; i < p.length - 1; i++) {
+    const p0 = p[i - 1] || p[i];
+    const p1 = p[i];
+    const p2 = p[i + 1];
+    const p3 = p[i + 2] || p2;
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${c1x} ${c1y}, ${c2x} ${c2y}, ${p2.x} ${p2.y}`;
+  }
+  return d;
+}
+
+// Stacked area chart for agent activity (4 roles)
+function AreaStack({ data, keys, colors, height = 200 }) {
+  const W = 760, H = height, padB = 22, padT = 10;
+  const innerH = H - padB - padT;
+  const n = data.length;
+  const totals = data.map((d) => keys.reduce((s, k) => s + d[k], 0));
+  const max = Math.max(...totals) * 1.1;
+  const xAt = (i) => (i / (n - 1)) * W;
+  const yAt = (v) => padT + innerH - (v / max) * innerH;
+
+  // build cumulative bands
+  let cum = data.map(() => 0);
+  const bands = keys.map((k) => {
+    const lower = cum.map((c) => c);
+    cum = cum.map((c, i) => c + data[i][k]);
+    const upper = cum.map((c) => c);
+    const top = upper.map((v, i) => ({ x: xAt(i), y: yAt(v) }));
+    const bot = lower.map((v, i) => ({ x: xAt(i), y: yAt(v) }));
+    const topPath = buildPath(top);
+    const botPath = buildPath([...bot].reverse());
+    const area = `${topPath} L ${bot[bot.length - 1].x} ${bot[bot.length - 1].y} ` +
+      botPath.replace('M', 'L') + ' Z';
+    return { key: k, area, line: topPath };
+  });
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
+      <defs>
+        {keys.map((k) => (
+          <linearGradient key={k} id={`grad-${k}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={colors[k]} stopOpacity="0.35" />
+            <stop offset="100%" stopColor={colors[k]} stopOpacity="0.02" />
+          </linearGradient>
+        ))}
+      </defs>
+      {bands.map((b) => (
+        <g key={b.key} className="area-band">
+          <path d={b.area} fill={`url(#grad-${b.key})`} />
+          <path d={b.line} fill="none" stroke={colors[b.key]} strokeWidth="1.5" opacity="0.85" />
+        </g>
+      ))}
+      {data.map((d, i) => (i % 2 === 0 ? (
+        <text key={i} x={xAt(i)} y={H - 6} fontSize="9" fill="#4A4A66" textAnchor="middle" fontFamily="'Geist Mono', monospace">{d.time}</text>
+      ) : null))}
+    </svg>
+  );
+}
+
+// Donut chart
+function Donut({ data, size = 150, thickness = 22 }) {
+  const total = data.reduce((s, d) => s + d.value, 0) || 1;
+  const r = (size - thickness) / 2;
+  const cx = size / 2, cy = size / 2;
+  const C = 2 * Math.PI * r;
+  let offset = 0;
+  return (
+    <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="#181824" strokeWidth={thickness} />
+      {data.map((d, i) => {
+        const frac = d.value / total;
+        const len = frac * C;
+        const gap = C - len;
+        const el = (
+          <circle
+            key={i} cx={cx} cy={cy} r={r} fill="none"
+            stroke={d.color} strokeWidth={thickness}
+            strokeDasharray={`${Math.max(len - 3, 0)} ${gap + 3}`}
+            strokeDashoffset={-offset} strokeLinecap="round"
+            style={{ transition: 'stroke-dasharray 0.9s cubic-bezier(0.16,1,0.3,1)' }}
+          />
+        );
+        offset += len;
+        return el;
+      })}
+    </svg>
+  );
+}
+
+// Line chart with gradient fill + dashed baseline
+function LineChart({ data, height = 280, color = '#00E5CC', baseline }) {
+  const W = 720, H = height, padB = 24, padT = 12, padL = 4, padR = 4;
+  const innerH = H - padB - padT;
+  const innerW = W - padL - padR;
+  const vals = data.map((d) => d.reward);
+  const min = Math.min(...vals) * 0.95;
+  const max = Math.max(...vals) * 1.05;
+  const n = data.length;
+  const xAt = (i) => padL + (i / (n - 1)) * innerW;
+  const yAt = (v) => padT + innerH - ((v - min) / (max - min)) * innerH;
+  const pts = data.map((d, i) => ({ x: xAt(i), y: yAt(d.reward) }));
+  const line = buildPath(pts);
+  const area = `${line} L ${pts[pts.length - 1].x} ${padT + innerH} L ${pts[0].x} ${padT + innerH} Z`;
+  const baseY = baseline != null ? yAt(baseline) : null;
+  const gridLines = 4;
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
+      <defs>
+        <linearGradient id="lc-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.18" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      {Array.from({ length: gridLines + 1 }, (_, i) => {
+        const y = padT + (i / gridLines) * innerH;
+        return <line key={i} x1={padL} y1={y} x2={W - padR} y2={y} stroke="#1a1a28" strokeWidth="1" strokeDasharray="2 4" />;
+      })}
+      <path d={area} fill="url(#lc-fill)" />
+      {baseY != null && (
+        <line x1={padL} y1={baseY} x2={W - padR} y2={baseY} stroke="#4A4A66" strokeWidth="1" strokeDasharray="5 5" />
+      )}
+      <path d={line} fill="none" stroke={color} strokeWidth="2" className="line-draw" />
+      <circle cx={pts[pts.length - 1].x} cy={pts[pts.length - 1].y} r="3.5" fill={color} className="pulse-dot" />
+      {data.map((d, i) => (i % Math.ceil(n / 6) === 0 ? (
+        <text key={i} x={xAt(i)} y={H - 7} fontSize="9" fill="#4A4A66" textAnchor="middle" fontFamily="'Geist Mono', monospace">{d.epoch}</text>
+      ) : null))}
+    </svg>
+  );
+}
+
+function Sparkline({ data, width = 84, height = 30, color = '#00E5CC' }) {
+  const max = Math.max(...data), min = Math.min(...data);
+  const pts = data.map((v, i) => ({
+    x: (i / (data.length - 1)) * width,
+    y: height - ((v - min) / ((max - min) || 1)) * (height - 4) - 2,
+  }));
+  return (
+    <svg width={width} height={height} style={{ display: 'block' }}>
+      <path d={buildPath(pts)} fill="none" stroke={color} strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+Object.assign(window, { AreaStack, Donut, LineChart, Sparkline });
+
+
+/* AI Utopia — shared UI primitives */
+const { useState, useEffect, useRef } = React;
+
+// Reveal-on-mount wrapper with stagger via CSS var delay
+function Reveal({ children, delay = 0, className = '', style = {}, as = 'div', ...rest }) {
+  const Tag = as;
+  return (
+    <Tag className={`reveal ${className}`} style={{ ...style, animationDelay: `${delay}ms` }} {...rest}>
+      {children}
+    </Tag>
+  );
+}
+
+function Card({ children, className = '', style = {}, span, elevated, hover = true, ...rest }) {
+  return (
+    <div
+      className={`card ${elevated ? 'card-elevated' : ''} ${hover ? 'card-hover' : ''} ${className}`}
+      style={{ ...(span ? { gridColumn: `span ${span}` } : {}), ...style }}
+      {...rest}
+    >
+      {children}
+    </div>
+  );
+}
+
+function SectionTitle({ children, right }) {
+  return (
+    <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
+      <h3 className="t-section">{children}</h3>
+      {right}
+    </div>
+  );
+}
+
+function StatusDot({ status, size = 8, pulse = true }) {
+  const c = window.AIU.statusColor[status] || '#7A7A99';
+  return (
+    <span
+      className={pulse ? 'pulse-dot-soft' : ''}
+      style={{ width: size, height: size, borderRadius: 999, background: c, boxShadow: `0 0 8px ${c}66`, display: 'inline-block', flexShrink: 0 }}
+    />
+  );
+}
+
+function RoleBadge({ role, withDot = true }) {
+  const c = window.AIU.getRoleColor(role);
+  return (
+    <span className="role-badge" style={{ background: `${c}15`, border: `1px solid ${c}40`, color: c }}>
+      {withDot && <span style={{ width: 5, height: 5, borderRadius: 999, background: c, display: 'inline-block' }} />}
+      <span style={{ textTransform: 'capitalize' }}>{role}</span>
+    </span>
+  );
+}
+
+// Placeholder avatar — role-colored ring + role glyph (clean, no external images)
+function Avatar({ role, name, size = 36, ring = true }) {
+  const c = window.AIU.getRoleColor(role);
+  const icon = window.AIU.roleMeta[role].icon;
+  return (
+    <div
+      style={{
+        width: size, height: size, borderRadius: 999, flexShrink: 0,
+        border: ring ? `2px solid ${c}` : 'none',
+        boxShadow: ring ? `0 0 12px ${c}22, inset 0 0 12px ${c}10` : 'none',
+        background: `radial-gradient(circle at 30% 25%, ${c}26, ${c}08 60%, #0c0c14)`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', color: c,
+        position: 'relative', overflow: 'hidden',
+      }}
+      title={name}
+    >
+      <window.Icon name={icon} size={size * 0.42} stroke={1.6} />
+    </div>
+  );
+}
+
+function Toggle({ value, onChange }) {
+  return (
+    <button
+      onClick={() => onChange(!value)}
+      className="toggle"
+      style={{ background: value ? 'var(--accent-cyan)' : 'var(--border-subtle)', boxShadow: value ? '0 0 10px rgba(0,229,204,0.35)' : 'none' }}
+      aria-pressed={value}
+    >
+      <span className="toggle-knob" style={{ left: value ? 16 : 2 }} />
+    </button>
+  );
+}
+
+function Slider({ value, min, max, step = 1, onChange, format }) {
+  const pct = ((value - min) / (max - min)) * 100;
+  return (
+    <div className="flex items-center" style={{ gap: 12, width: '100%' }}>
+      <input
+        type="range" min={min} max={max} step={step} value={value}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+        className="range"
+        style={{ background: `linear-gradient(to right, var(--accent-cyan) 0%, var(--accent-cyan) ${pct}%, var(--border-subtle) ${pct}%, var(--border-subtle) 100%)` }}
+      />
+      <span className="t-data" style={{ fontSize: 12, minWidth: 34, textAlign: 'right' }}>
+        {format ? format(value) : value}
+      </span>
+    </div>
+  );
+}
+
+function Segmented({ options, value, onChange, accent = 'var(--accent-cyan)' }) {
+  return (
+    <div className="segmented">
+      {options.map((o) => {
+        const v = typeof o === 'object' ? o.value : o;
+        const label = typeof o === 'object' ? o.label : o;
+        const active = v === value;
+        return (
+          <button
+            key={v} onClick={() => onChange(v)} className="segmented-btn"
+            style={{
+              background: active ? accent : 'transparent',
+              color: active ? 'var(--void)' : 'var(--text-secondary)',
+              fontWeight: active ? 600 : 400,
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function GhostButton({ children, color = 'var(--accent-cyan)', icon, onClick, full, style = {} }) {
+  return (
+    <button
+      onClick={onClick}
+      className="ghost-btn"
+      style={{ '--bc': color, color, width: full ? '100%' : 'auto', ...style }}
+    >
+      {icon && <window.Icon name={icon} size={13} />}
+      {children}
+    </button>
+  );
+}
+
+// Animated number that eases to its target & re-runs when target changes
+function AnimatedNumber({ value, decimals = 0, prefix = '', suffix = '', duration = 900 }) {
+  const [display, setDisplay] = useState(0);
+  const from = useRef(0);
+  useEffect(() => {
+    const start = Date.now();
+    const a = from.current, b = value;
+    const id = setInterval(() => {
+      const t = Math.min((Date.now() - start) / duration, 1);
+      const e = 1 - Math.pow(1 - t, 3);
+      setDisplay(a + (b - a) * e);
+      if (t >= 1) { clearInterval(id); from.current = b; }
+    }, 16);
+    return () => clearInterval(id);
+  }, [value]);
+  return <span>{prefix}{display.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}{suffix}</span>;
+}
+
+function Field({ label, description, children, full }) {
+  return (
+    <div style={{ padding: '12px 0', ...(full ? { gridColumn: '1 / -1' } : {}) }}>
+      <div className="flex items-center justify-between" style={{ gap: 16 }}>
+        <div>
+          <label className="t-label">{label}</label>
+          {description && <p className="t-caption" style={{ marginTop: 3 }}>{description}</p>}
+        </div>
+        <div style={{ flexShrink: 0 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+Object.assign(window, {
+  Reveal, Card, SectionTitle, StatusDot, RoleBadge, Avatar, Toggle, Slider,
+  Segmented, GhostButton, AnimatedNumber, Field,
+});
+
+
+
+/* === pages === */
+/* AI Utopia — Dashboard tab */
+const Dashboard = (function () {
+  const { useState, useEffect } = React;
+  const { Card, Reveal, SectionTitle, StatusDot, Avatar, AnimatedNumber, AreaStack, Donut, Icon } = window;
+  const AIU = window.AIU;
+
+  function Metric({ icon, value, label, sub, trend, delay, animated, decimals }) {
+    const tc = trend === 'up' ? 'var(--accent-cyan)' : trend === 'down' ? 'var(--status-offline)' : 'var(--text-tertiary)';
+    return (
+      <Reveal delay={delay} style={{ gridColumn: 'span 3' }}>
+        <Card className="card-hover" style={{ padding: 18, height: '100%' }}>
+          <div className="flex items-center justify-between">
+            <Icon name={icon} size={17} style={{ color: 'var(--text-tertiary)' }} />
+            <Icon name={trend === 'up' ? 'trendUp' : trend === 'down' ? 'trendDown' : 'minus'} size={13} style={{ color: tc }} />
+          </div>
+          <div className="t-data" style={{ marginTop: 16 }}>
+            {animated ? <AnimatedNumber value={value} decimals={decimals || 0} /> : value}
+          </div>
+          <div className="t-label" style={{ marginTop: 7 }}>{label}</div>
+          <div className="t-caption" style={{ marginTop: 4, color: tc }}>{sub}</div>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  function ActivityTimeline() {
+    const colors = AIU.roleColors;
+    return (
+      <Reveal delay={120} style={{ gridColumn: 'span 8' }}>
+        <Card style={{ padding: 18 }}>
+          <SectionTitle right={<span className="t-caption">last 7 hrs</span>}>Agent Activity Timeline</SectionTitle>
+          <AreaStack data={AIU.activity} keys={['gatherer', 'builder', 'farmer', 'defender']} colors={colors} height={196} />
+          <div className="flex items-center" style={{ gap: 18, marginTop: 12 }}>
+            {Object.keys(AIU.roleMeta).map((r) => (
+              <div key={r} className="flex items-center" style={{ gap: 6 }}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, background: colors[r] }} />
+                <span className="t-caption capitalize">{r}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  function RewardDistribution() {
+    const agents = AIU.agents;
+    const total = agents.reduce((s, a) => s + a.rewards, 0);
+    const data = agents.map((a) => ({ name: a.name, value: a.rewards, color: AIU.getRoleColor(a.role) }));
+    const sorted = [...agents].sort((a, b) => b.rewards - a.rewards);
+    return (
+      <Reveal delay={150} style={{ gridColumn: 'span 4' }}>
+        <Card style={{ padding: 18, height: '100%' }}>
+          <SectionTitle>Reward Distribution</SectionTitle>
+          <div className="flex items-center" style={{ gap: 16 }}>
+            <div className="relative" style={{ width: 132, height: 132, flexShrink: 0 }}>
+              <Donut data={data} size={132} thickness={20} />
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                <div className="t-data" style={{ fontSize: 22 }}>+<AnimatedNumber value={total} /></div>
+                <div className="t-label" style={{ marginTop: 2 }}>Total</div>
+              </div>
+            </div>
+            <div className="flex-1 flex flex-col" style={{ gap: 9 }}>
+              {sorted.map((a, i) => (
+                <div key={a.id} className="flex items-center justify-between">
+                  <div className="flex items-center" style={{ gap: 8 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: 999, background: AIU.getRoleColor(a.role) }} />
+                    <span className="t-body" style={{ color: 'var(--text-primary)' }}>{a.name}</span>
+                  </div>
+                  <span className="t-caption mono">+{a.rewards}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  const typeColors = { AGENT: 'var(--accent-cyan)', TRAIN: 'var(--accent-lavender)', SYSTEM: 'var(--text-secondary)', CHAT: '#66BB6A' };
+
+  function ActivityFeed() {
+    const [logs, setLogs] = useState(AIU.logs);
+    return (
+      <Reveal delay={180} style={{ gridColumn: 'span 7' }}>
+        <Card style={{ padding: 18, display: 'flex', flexDirection: 'column', height: 360 }}>
+          <SectionTitle right={<span className="flex items-center t-caption" style={{ gap: 6, color: 'var(--accent-cyan)' }}><StatusDot status="alive" size={6} /> LIVE</span>}>Live Activity Feed</SectionTitle>
+          <div className="flex-1" style={{ overflowY: 'auto', marginRight: -6, paddingRight: 6 }}>
+            {logs.map((log, i) => (
+              <div key={log.id} className="flex items-start" style={{ gap: 10, padding: '6px 4px', borderRadius: 6, background: i % 2 ? 'transparent' : 'rgba(255,255,255,0.012)' }}>
+                <span className="t-caption mono" style={{ minWidth: 52 }}>{log.timestamp}</span>
+                <span className="t-caption mono" style={{ color: typeColors[log.type], minWidth: 50, fontWeight: 500 }}>[{log.type}]</span>
+                <span className="t-body" style={{ lineHeight: 1.5 }}>{log.message}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  function ActiveAgents({ onOpen }) {
+    return (
+      <Reveal delay={210} style={{ gridColumn: 'span 5' }}>
+        <Card style={{ padding: 18, height: 360, display: 'flex', flexDirection: 'column' }}>
+          <SectionTitle right={<span className="t-caption">{AIU.agents.length} online</span>}>Active Agents</SectionTitle>
+          <div className="flex flex-col flex-1" style={{ gap: 9 }}>
+            {AIU.agents.map((a) => (
+              <button key={a.id} onClick={() => onOpen(a.id)} className="agent-row flex items-center" style={{
+                gap: 12, padding: 10, borderRadius: 10, textAlign: 'left', cursor: 'pointer', flex: 1,
+                background: 'var(--surface-2)', border: '1px solid var(--border-subtle)', transition: 'all 0.2s var(--ease)',
+              }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--border-active)'; e.currentTarget.style.transform = 'translateX(2px)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border-subtle)'; e.currentTarget.style.transform = 'none'; }}>
+                <Avatar role={a.role} name={a.name} size={38} />
+                <div className="flex-1" style={{ minWidth: 0 }}>
+                  <div className="t-body truncate" style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{a.name}</div>
+                  <div className="t-caption capitalize">{a.role} · {a.status}</div>
+                </div>
+                <StatusDot status={a.status} />
+              </button>
+            ))}
+          </div>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  return function Dashboard({ onOpenAgent }) {
+    const [epochs, setEpochs] = useState(1247);
+    const [worldTime, setWorldTime] = useState(14.53);
+    useEffect(() => {
+      const a = setInterval(() => setWorldTime((t) => (t + 0.004) % 24), 120);
+      const b = setInterval(() => setEpochs((e) => e + 1), 9000);
+      return () => { clearInterval(a); clearInterval(b); };
+    }, []);
+    const timeStr = `${String(Math.floor(worldTime)).padStart(2, '0')}:${String(Math.floor((worldTime % 1) * 60)).padStart(2, '0')}`;
+
+    return (
+      <div className="grid12">
+        <Metric icon="users" value={4} animated label="Active Agents" sub="+2 this session" trend="up" delay={0} />
+        <Metric icon="brain" value={epochs} animated label="Epochs Completed" sub="Batch 64 / 128" trend="neutral" delay={40} />
+        <Metric icon="database" value={8492} animated label="Memory Entries" sub="ChromaDB active" trend="neutral" delay={80} />
+        <Metric icon="clock" value={timeStr} label="World Time" sub="Day 1,247" trend="neutral" delay={120} />
+        <ActivityTimeline />
+        <RewardDistribution />
+        <ActivityFeed />
+        <ActiveAgents onOpen={onOpenAgent} />
+      </div>
+    );
+  };
+})();
+window.Dashboard = Dashboard;
+
+
+/* AI Utopia — Bot Config tab */
+const BotConfig = (function () {
+  const { useState } = React;
+  const { Card, Reveal, SectionTitle, Toggle, Slider, Avatar, RoleBadge, StatusDot, GhostButton, Icon } = window;
+  const AIU = window.AIU;
+  const roles = Object.keys(AIU.roleMeta);
+
+  function SpawnController({ selected, setSelected }) {
+    const [name, setName] = useState('');
+    return (
+      <Reveal style={{ gridColumn: '1 / -1' }}>
+        <Card elevated className="card-hover" style={{ padding: 18 }}>
+          <div className="flex items-center wrap" style={{ gap: 20 }}>
+            <span className="t-section">Spawn Agent</span>
+            <div className="flex items-center" style={{ gap: 8 }}>
+              {roles.map((r) => {
+                const c = AIU.getRoleColor(r);
+                const on = selected === r;
+                return (
+                  <button key={r} onClick={() => setSelected(r)} className="flex items-center" style={{
+                    gap: 8, height: 36, padding: '0 14px', borderRadius: 9, cursor: 'pointer',
+                    background: on ? `${c}18` : 'var(--surface-2)',
+                    border: `1px solid ${on ? `${c}60` : 'var(--border-subtle)'}`,
+                    color: on ? c : 'var(--text-secondary)', transition: 'all 0.2s var(--ease)',
+                  }}>
+                    <Icon name={AIU.roleMeta[r].icon} size={14} />
+                    <span style={{ fontSize: 11.5 }}>{AIU.roleMeta[r].label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <input className="inp" style={{ width: 200 }} placeholder="Auto-generate from pool" value={name} onChange={(e) => setName(e.target.value)} />
+            <button className="fill-btn" style={{ background: AIU.getRoleColor(selected), boxShadow: `0 0 0 0` }}
+              onMouseEnter={(e) => e.currentTarget.style.boxShadow = `0 0 22px ${AIU.getRoleColor(selected)}40`}
+              onMouseLeave={(e) => e.currentTarget.style.boxShadow = 'none'}>
+              <Icon name="sparkles" size={13} /> Spawn
+            </button>
+          </div>
+          <p className="t-caption" style={{ marginTop: 14, maxWidth: 620 }}>
+            Agents receive a persistent ULID identity, skin, episodic-memory collection, and ChromaDB indexes on spawn.
+          </p>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  function ParamsForm({ role }) {
+    const [temp, setTemp] = useState(0.7);
+    const [maxTokens, setMaxTokens] = useState(2048);
+    const [mem, setMem] = useState({ episodic: true, skill: true, rag: false });
+    return (
+      <Reveal delay={80} style={{ gridColumn: 'span 7' }}>
+        <Card style={{ padding: 18 }}>
+          <SectionTitle>Agent Parameters</SectionTitle>
+          <div className="flex flex-col" style={{ gap: 16 }}>
+            <div className="grid12" style={{ gap: 14 }}>
+              <div style={{ gridColumn: 'span 6' }}>
+                <label className="t-label" style={{ display: 'block', marginBottom: 7 }}>Role</label>
+                <div className="inp flex items-center capitalize" style={{ color: 'var(--text-tertiary)' }}>{role} · locked after spawn</div>
+              </div>
+              <div style={{ gridColumn: 'span 6' }}>
+                <label className="t-label" style={{ display: 'block', marginBottom: 7 }}>Skin Pool</label>
+                <select className="inp full"><option>Default Villager</option><option>Steve Variant</option><option>Alex Variant</option><option>Custom Upload</option></select>
+              </div>
+              <div style={{ gridColumn: 'span 6' }}>
+                <label className="t-label" style={{ display: 'block', marginBottom: 7 }}>Neural Planner</label>
+                <select className="inp full"><option>Claude Haiku</option><option>Local Qwen 14B</option><option>Stub Planner</option><option>Manual CLI</option></select>
+              </div>
+              <div style={{ gridColumn: 'span 6' }}>
+                <label className="t-label" style={{ display: 'block', marginBottom: 7 }}>Max Tokens</label>
+                <input type="number" className="inp full" value={maxTokens} onChange={(e) => setMaxTokens(+e.target.value)} />
+              </div>
+            </div>
+            <div>
+              <label className="t-label" style={{ display: 'block', marginBottom: 9 }}>Temperature</label>
+              <Slider value={temp} min={0} max={2} step={0.1} onChange={setTemp} format={(v) => v.toFixed(1)} />
+            </div>
+            <div>
+              <label className="t-label" style={{ display: 'block', marginBottom: 7 }}>System Prompt</label>
+              <textarea className="inp full mono" rows={4} style={{ fontSize: 11, color: 'var(--text-secondary)' }}
+                defaultValue={"You are a cooperative AI agent in a Minecraft village. Work with other agents to gather resources, build structures, farm crops, and defend the village. Communicate via chat when coordination is needed. Prioritize the village's collective wellbeing over individual tasks."} />
+            </div>
+            <div>
+              <label className="t-label" style={{ display: 'block', marginBottom: 10 }}>Memory Strategy</label>
+              <div className="flex flex-col" style={{ gap: 11 }}>
+                {[['Episodic Memory', 'episodic'], ['Skill Library', 'skill'], ['RAG Context', 'rag']].map(([lbl, k]) => (
+                  <div key={k} className="flex items-center justify-between">
+                    <span className="t-body">{lbl}</span>
+                    <Toggle value={mem[k]} onChange={(v) => setMem((m) => ({ ...m, [k]: v }))} />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center" style={{ gap: 12, marginTop: 4 }}>
+              <GhostButton color="var(--accent-cyan)" icon="check">Apply Changes</GhostButton>
+              <button className="ghost-btn" style={{ border: '1px solid transparent', color: 'var(--text-tertiary)' }}>Reset</button>
+            </div>
+          </div>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  function IdentityPreview({ agent }) {
+    const c = AIU.getRoleColor(agent.role);
+    const stats = [
+      ['Born', '2026-05-26 14:23'], ['Status', agent.status.toUpperCase()],
+      ['Skin', agent.skin], ['Memory', '2 collections'],
+    ];
+    return (
+      <Reveal delay={120} style={{ gridColumn: 'span 5' }}>
+        <Card className="card-hover" style={{ padding: 22, height: '100%' }}>
+          <div className="flex flex-col items-center">
+            <Avatar role={agent.role} name={agent.name} size={88} />
+            <h4 className="t-hero" style={{ fontSize: 20, marginTop: 16 }}>{agent.name}</h4>
+            <div style={{ marginTop: 8 }}><RoleBadge role={agent.role} /></div>
+            <code className="t-caption mono" style={{ marginTop: 10, letterSpacing: '0.04em' }}>{agent.uuid}</code>
+            <div className="grid12" style={{ gap: 10, width: '100%', marginTop: 20 }}>
+              {stats.map(([l, v]) => (
+                <div key={l} className="soft" style={{ gridColumn: 'span 6', padding: 12 }}>
+                  <div className="t-label" style={{ marginBottom: 6 }}>{l}</div>
+                  <div className="t-body" style={{ color: 'var(--text-primary)', fontSize: 11.5 }}>
+                    {l === 'Status' ? <span className="flex items-center" style={{ gap: 6 }}><StatusDot status={agent.status} size={6} />{v}</span> : v}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center full" style={{ gap: 10, marginTop: 16 }}>
+              <GhostButton color="var(--status-offline)" icon="userX" full>Terminate</GhostButton>
+              <GhostButton color="var(--accent-cyan)" icon="brain" full>Inspect Memory</GhostButton>
+            </div>
+          </div>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  return function BotConfig() {
+    const [selected, setSelected] = useState('gatherer');
+    const previewAgent = AIU.agents.find((a) => a.role === selected) || AIU.agents[0];
+    return (
+      <div className="grid12">
+        <SpawnController selected={selected} setSelected={setSelected} />
+        <ParamsForm role={selected} />
+        <IdentityPreview agent={previewAgent} />
+      </div>
+    );
+  };
+})();
+window.BotConfig = BotConfig;
+
+
+/* AI Utopia — Training tab */
+const Training = (function () {
+  const { useState } = React;
+  const { Card, Reveal, SectionTitle, Slider, Segmented, GhostButton, Sparkline, LineChart, Icon } = window;
+  const AIU = window.AIU;
+
+  function Pipeline({ active }) {
+    const stages = [
+      { name: 'Environment Setup', status: 'complete' },
+      { name: 'Observation Feed', status: 'active' },
+      { name: 'Policy Update', status: 'pending' },
+      { name: 'Weight Promotion', status: 'pending' },
+    ];
+    return (
+      <Reveal style={{ gridColumn: '1 / -1' }}>
+        <Card style={{ padding: 20 }}>
+          <SectionTitle right={<span className="t-caption">PPO + LSTM · seed 42</span>}>Training Pipeline</SectionTitle>
+          <div className="flex items-center justify-center" style={{ marginTop: 6 }}>
+            {stages.map((s, i) => {
+              const done = s.status === 'complete', on = s.status === 'active';
+              return (
+                <div key={s.name} className="flex items-center">
+                  <div className="flex flex-col items-center" style={{ gap: 9, width: 110 }}>
+                    <div className="relative flex items-center justify-center" style={{
+                      width: 42, height: 42, borderRadius: 999,
+                      background: done ? 'var(--accent-cyan)' : 'transparent',
+                      border: `2px solid ${done || on ? 'var(--accent-cyan)' : 'var(--border-subtle)'}`,
+                    }}>
+                      {on && <span style={{ position: 'absolute', inset: -2, borderRadius: 999, border: '2px solid var(--accent-cyan)', animation: 'ringPing 1.6s ease-out infinite' }} />}
+                      {done && <Icon name="check" size={18} style={{ color: 'var(--void)' }} stroke={2.5} />}
+                      {on && <Icon name="loader" size={16} className="spin" style={{ color: 'var(--accent-cyan)' }} />}
+                      {!done && !on && <Icon name="circle" size={9} style={{ color: 'var(--text-tertiary)' }} fill="var(--text-tertiary)" />}
+                    </div>
+                    <span className="t-caption" style={{ textAlign: 'center', color: done || on ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>{s.name}</span>
+                  </div>
+                  {i < stages.length - 1 && (
+                    <div style={{ width: 70, height: 2, marginTop: -26, borderRadius: 2, background: done ? 'linear-gradient(90deg, var(--accent-cyan), var(--border-subtle))' : 'var(--border-subtle)' }} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center justify-center" style={{ gap: 14, marginTop: 18 }}>
+            <span className="t-body">{active ? 'Pipeline active' : 'Pipeline paused'} — Epoch 1,247 in progress</span>
+            <span className="t-data mono" style={{ fontSize: 16, color: 'var(--accent-cyan)' }}>00:14:32</span>
+          </div>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  function Metrics() {
+    const spark = Array.from({ length: 28 }, (_, i) => 2 + Math.sin(i * 0.4) * 0.3 + Math.sin(i * 1.3) * 0.08);
+    const items = [
+      { label: 'Mean Reward', value: '+2.14', trend: 'up', spark: true },
+      { label: 'Policy Loss', value: '0.0047', trend: 'down' },
+      { label: 'Value Loss', value: '0.0089', trend: 'neutral' },
+      { label: 'Entropy', value: '0.312', trend: 'up' },
+      { label: 'KL Divergence', value: '0.0021', trend: 'down' },
+    ];
+    return (
+      <Reveal delay={80} style={{ gridColumn: 'span 4' }}>
+        <div className="flex flex-col" style={{ gap: 12, height: '100%' }}>
+          {items.map((m) => (
+            <Card key={m.label} className="card-hover" style={{ padding: 15, flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div className="t-label" style={{ marginBottom: 5 }}>{m.label}</div>
+                <div className="flex items-center" style={{ gap: 8 }}>
+                  <span className="t-data" style={{ fontSize: 21 }}>{m.value}</span>
+                  <Icon name={m.trend === 'up' ? 'up' : m.trend === 'down' ? 'down' : 'minus'} size={13}
+                    style={{ color: m.trend === 'up' ? 'var(--accent-cyan)' : m.trend === 'down' ? 'var(--status-training)' : 'var(--text-tertiary)' }} />
+                </div>
+              </div>
+              {m.spark && <Sparkline data={spark} />}
+            </Card>
+          ))}
+        </div>
+      </Reveal>
+    );
+  }
+
+  function RewardChart() {
+    return (
+      <Reveal delay={120} style={{ gridColumn: 'span 5' }}>
+        <Card style={{ padding: 18, height: '100%' }}>
+          <SectionTitle right={<span className="t-caption flex items-center" style={{ gap: 6 }}><span style={{ width: 14, height: 0, borderTop: '1px dashed var(--text-tertiary)', display: 'inline-block' }} />baseline 1.8</span>}>Reward Over Time</SectionTitle>
+          <LineChart data={AIU.rewardCurve} baseline={1.8} height={272} />
+        </Card>
+      </Reveal>
+    );
+  }
+
+  function Controls({ active, setActive }) {
+    const [lr, setLr] = useState(4);
+    const [batch, setBatch] = useState(64);
+    const [gamma, setGamma] = useState(99);
+    return (
+      <Reveal delay={160} style={{ gridColumn: 'span 3' }}>
+        <Card style={{ padding: 18, height: '100%' }}>
+          <SectionTitle>Controls</SectionTitle>
+          <div className="flex flex-col" style={{ gap: 10 }}>
+            <GhostButton color="var(--status-training)" icon={active ? 'pause' : 'play'} full onClick={() => setActive(!active)}>{active ? 'Pause Training' : 'Resume Training'}</GhostButton>
+            <GhostButton color="var(--accent-cyan)" icon="save" full>Save Checkpoint</GhostButton>
+            <GhostButton color="var(--accent-lavender)" icon="trophy" full>
+              Promote Weights
+              <span style={{ marginLeft: 2, padding: '1px 7px', borderRadius: 999, fontSize: 9, background: 'var(--accent-lavender)', color: 'var(--void)' }}>3</span>
+            </GhostButton>
+            <GhostButton color="var(--status-offline)" icon="stop" full>Emergency Stop</GhostButton>
+          </div>
+          <div className="flex flex-col" style={{ gap: 18, marginTop: 22 }}>
+            <div>
+              <label className="t-label" style={{ display: 'block', marginBottom: 9 }}>Learning Rate</label>
+              <Slider value={lr} min={2} max={6} step={1} onChange={setLr} format={(v) => `1e-${v}`} />
+            </div>
+            <div>
+              <label className="t-label" style={{ display: 'block', marginBottom: 9 }}>Batch Size</label>
+              <Segmented options={[16, 32, 64, 128]} value={batch} onChange={setBatch} />
+            </div>
+            <div>
+              <label className="t-label" style={{ display: 'block', marginBottom: 9 }}>Gamma</label>
+              <Slider value={gamma} min={90} max={99} step={1} onChange={setGamma} format={(v) => (v / 100).toFixed(2)} />
+            </div>
+          </div>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  function EpochTable() {
+    const [sortKey, setSortKey] = useState('epoch');
+    const [dir, setDir] = useState('desc');
+    const headers = [['epoch', 'Epoch'], ['meanReward', 'Mean Reward'], ['policyLoss', 'Policy Loss'], ['valueLoss', 'Value Loss'], ['entropy', 'Entropy'], ['klDiv', 'KL Div'], ['duration', 'Duration'], ['status', 'Status']];
+    const sorted = [...AIU.epochs].sort((a, b) => {
+      const x = a[sortKey], y = b[sortKey];
+      if (typeof x === 'number') return dir === 'asc' ? x - y : y - x;
+      return dir === 'asc' ? String(x).localeCompare(String(y)) : String(y).localeCompare(String(x));
+    });
+    const sc = { improved: 'var(--accent-cyan)', stable: 'var(--status-training)', degraded: 'var(--status-offline)' };
+    const click = (k) => { if (sortKey === k) setDir(dir === 'asc' ? 'desc' : 'asc'); else { setSortKey(k); setDir('desc'); } };
+    return (
+      <Reveal delay={200} style={{ gridColumn: '1 / -1' }}>
+        <Card style={{ padding: 18 }}>
+          <SectionTitle right={<span className="t-caption">{AIU.epochs.length} epochs</span>}>Epoch History</SectionTitle>
+          <div style={{ overflow: 'auto', maxHeight: 300 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead style={{ position: 'sticky', top: 0, background: 'var(--elevated)', zIndex: 1 }}>
+                <tr>{headers.map(([k, l]) => (
+                  <th key={k} onClick={() => click(k)} className="t-label" style={{ textAlign: 'left', padding: '9px 12px', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+                    <span className="flex items-center" style={{ gap: 4 }}>{l}{sortKey === k && <span style={{ color: 'var(--accent-cyan)' }}>{dir === 'asc' ? '↑' : '↓'}</span>}</span>
+                  </th>
+                ))}</tr>
+              </thead>
+              <tbody>
+                {sorted.map((e) => (
+                  <tr key={e.epoch} className="epoch-row" style={{ background: e.epoch % 2 ? 'transparent' : 'rgba(255,255,255,0.012)' }}
+                    onMouseEnter={(ev) => ev.currentTarget.style.background = 'rgba(0,229,204,0.04)'}
+                    onMouseLeave={(ev) => ev.currentTarget.style.background = e.epoch % 2 ? 'transparent' : 'rgba(255,255,255,0.012)'}>
+                    <td className="t-body mono" style={{ padding: '9px 12px', color: 'var(--text-primary)' }}>{e.epoch}</td>
+                    <td className="t-body mono" style={{ padding: '9px 12px', color: 'var(--accent-cyan)' }}>+{e.meanReward.toFixed(2)}</td>
+                    <td className="t-body mono" style={{ padding: '9px 12px' }}>{e.policyLoss.toFixed(4)}</td>
+                    <td className="t-body mono" style={{ padding: '9px 12px' }}>{e.valueLoss.toFixed(4)}</td>
+                    <td className="t-body mono" style={{ padding: '9px 12px' }}>{e.entropy.toFixed(3)}</td>
+                    <td className="t-body mono" style={{ padding: '9px 12px' }}>{e.klDiv.toFixed(4)}</td>
+                    <td className="t-caption mono" style={{ padding: '9px 12px' }}>{e.duration}</td>
+                    <td style={{ padding: '9px 12px' }}>
+                      <span className="flex items-center" style={{ gap: 7 }}>
+                        <span style={{ width: 7, height: 7, borderRadius: 999, background: sc[e.status] }} />
+                        <span className="t-caption capitalize">{e.status}</span>
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  return function Training() {
+    const [active, setActive] = useState(true);
+    return (
+      <div className="grid12">
+        <Pipeline active={active} />
+        <Metrics />
+        <RewardChart />
+        <Controls active={active} setActive={setActive} />
+        <EpochTable />
+      </div>
+    );
+  };
+})();
+window.Training = Training;
+
+
+/* AI Utopia — Spectate tab */
+const Spectate = (function () {
+  const { useState, useRef, useEffect } = React;
+  const { Card, Reveal, SectionTitle, Avatar, RoleBadge, StatusDot, Icon } = window;
+  const AIU = window.AIU;
+
+  function WorldViewport() {
+    const ref = useRef(null);
+    const posRef = useRef(AIU.agents.map((a, i) => ({
+      role: a.role, name: a.name,
+      x: 140 + i * 150 + a.x * 0.3, y: 120 + (i % 2) * 140 + a.z * 0.2,
+      vx: (Math.sin(i * 9) ) * 0.35, vy: (Math.cos(i * 7)) * 0.35, trail: [],
+    })));
+    useEffect(() => {
+      const canvas = ref.current; if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const draw = () => {
+        const w = canvas.width, h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = '#07070d'; ctx.fillRect(0, 0, w, h);
+        // grid
+        ctx.strokeStyle = 'rgba(34,34,51,0.4)'; ctx.lineWidth = 0.5;
+        for (let x = 0; x < w; x += 38) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+        for (let y = 0; y < h; y += 38) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+        // center village marker
+        ctx.strokeStyle = 'rgba(0,229,204,0.25)'; ctx.setLineDash([4, 6]);
+        ctx.beginPath(); ctx.arc(w / 2, h / 2, 60, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+        posRef.current.forEach((p) => {
+          p.x += p.vx; p.y += p.vy;
+          if (p.x < 26 || p.x > w - 26) p.vx *= -1;
+          if (p.y < 26 || p.y > h - 26) p.vy *= -1;
+          p.x = Math.max(26, Math.min(w - 26, p.x)); p.y = Math.max(26, Math.min(h - 26, p.y));
+          p.trail.push({ x: p.x, y: p.y }); if (p.trail.length > 34) p.trail.shift();
+          const c = AIU.getRoleColor(p.role);
+          ctx.strokeStyle = c + '33'; ctx.lineWidth = 1.2; ctx.beginPath();
+          p.trail.forEach((t, j) => j === 0 ? ctx.moveTo(t.x, t.y) : ctx.lineTo(t.x, t.y)); ctx.stroke();
+          const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 22);
+          g.addColorStop(0, c + '55'); g.addColorStop(1, 'transparent');
+          ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, 22, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = c; ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#E8E8F0'; ctx.font = "500 11px 'Geist Mono', monospace"; ctx.textAlign = 'center';
+          ctx.fillText(p.name, p.x, p.y - 13);
+        });
+      };
+      const id = setInterval(draw, 33);
+      return () => clearInterval(id);
+    }, []);
+    return (
+      <Reveal style={{ gridColumn: 'span 8' }}>
+        <Card style={{ overflow: 'hidden', position: 'relative', aspectRatio: '16/9' }}>
+          <canvas ref={ref} width={880} height={495} style={{ width: '100%', height: '100%', display: 'block' }} />
+          <div style={{ position: 'absolute', top: 14, left: 14 }}>
+            <div className="flex items-center" style={{ gap: 7 }}><StatusDot status="alive" size={6} /><span className="t-caption" style={{ color: 'var(--text-secondary)', letterSpacing: '0.08em' }}>OVERWORLD · DAY 1,247 · 14:32</span></div>
+            <div className="t-caption mono" style={{ marginTop: 4 }}>spawn (64.5, 66, -47.5)</div>
+          </div>
+          <div className="flex items-center" style={{ position: 'absolute', bottom: 14, right: 14, gap: 6 }}>
+            {['zoomIn', 'zoomOut', 'grid'].map((n) => (
+              <button key={n} className="flex items-center justify-center" style={{ width: 30, height: 30, borderRadius: 8, cursor: 'pointer', background: 'rgba(8,8,15,0.8)', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)', transition: 'color 0.2s' }}
+                onMouseEnter={(e) => e.currentTarget.style.color = 'var(--text-primary)'} onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}>
+                <Icon name={n} size={13} />
+              </button>
+            ))}
+          </div>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  function Inspector({ agent }) {
+    const [tab, setTab] = useState('state');
+    const tabs = [['state', 'State'], ['memory', 'Memory'], ['plan', 'Plan']];
+    const c = AIU.getRoleColor(agent.role);
+    const memory = [
+      { time: '14:30', content: 'Observed oak tree cluster at (142, 64, -89)', imp: 0.7 },
+      { time: '14:25', content: 'Chopped 12 oak_log successfully', imp: 0.9 },
+      { time: '14:20', content: 'Navigated to village stockpile', imp: 0.5 },
+      { time: '14:15', content: 'Deposited resources in chest', imp: 0.8 },
+    ];
+    const plan = [
+      { s: 'active', d: 'Collect 64 oak_log for village', i: 0 },
+      { s: 'active', d: 'Navigate to forest biome', i: 1 },
+      { s: 'completed', d: 'Locate oak tree cluster', i: 2 },
+      { s: 'active', d: 'Chop trees until inventory full', i: 2 },
+      { s: 'pending', d: 'Return to stockpile', i: 2 },
+      { s: 'pending', d: 'Deposit collected wood', i: 2 },
+    ];
+    const planColor = { active: 'var(--accent-cyan)', completed: '#66BB6A', pending: 'var(--text-tertiary)' };
+    return (
+      <Reveal delay={80} style={{ gridColumn: 'span 4' }}>
+        <Card style={{ padding: 18, height: '100%' }}>
+          <div className="flex items-center" style={{ gap: 12, marginBottom: 16 }}>
+            <Avatar role={agent.role} name={agent.name} size={56} />
+            <div>
+              <div className="t-body" style={{ color: 'var(--text-primary)', fontWeight: 500, fontSize: 14 }}>{agent.name}</div>
+              <div style={{ marginTop: 5 }}><RoleBadge role={agent.role} /></div>
+              <div className="flex items-center" style={{ gap: 6, marginTop: 6 }}><StatusDot status={agent.status} size={6} /><span className="t-caption capitalize">{agent.status}</span></div>
+            </div>
+          </div>
+          <div className="flex" style={{ borderBottom: '1px solid var(--border-subtle)', marginBottom: 14 }}>
+            {tabs.map(([k, l]) => (
+              <button key={k} onClick={() => setTab(k)} className="relative" style={{ padding: '9px 14px', cursor: 'pointer', background: 'transparent', border: 'none', fontSize: 11.5, color: tab === k ? 'var(--accent-cyan)' : 'var(--text-secondary)', fontWeight: tab === k ? 500 : 400 }}>
+                {l}{tab === k && <span style={{ position: 'absolute', bottom: -1, left: 0, right: 0, height: 2, background: 'var(--accent-cyan)' }} />}
+              </button>
+            ))}
+          </div>
+          <div style={{ minHeight: 270, maxHeight: 290, overflow: 'auto' }} className="tab-fade" key={tab}>
+            {tab === 'state' && (
+              <div className="soft mono" style={{ padding: 14, fontSize: 10.5, lineHeight: 1.9, color: 'var(--text-secondary)' }}>
+                {[['position', '(142, 64, -89)'], ['health', `${agent.health.toFixed(1)}/20.0`], ['hunger', `${agent.hunger.toFixed(1)}/20.0`]].map(([k, v]) => (
+                  <div key={k}><span style={{ color: 'var(--text-tertiary)' }}>{k}:</span> {v}</div>
+                ))}
+                <div><span style={{ color: 'var(--text-tertiary)' }}>inventory:</span></div>
+                <div style={{ paddingLeft: 14, color: 'var(--accent-cyan)' }}>oak_log: 12<br />stone: 4<br />wheat_seeds: 8</div>
+                <div><span style={{ color: 'var(--text-tertiary)' }}>nearby:</span></div>
+                <div style={{ paddingLeft: 14 }}>oak_tree x3 (5.2m)<br />chest (12.8m)</div>
+                <div><span style={{ color: 'var(--text-tertiary)' }}>action:</span> "chopping oak_log"</div>
+                <div><span style={{ color: 'var(--text-tertiary)' }}>target:</span> (145, 64, -87)</div>
+              </div>
+            )}
+            {tab === 'memory' && (
+              <div className="flex flex-col" style={{ gap: 9 }}>
+                {memory.map((m, i) => (
+                  <div key={i} className="soft" style={{ padding: 12 }}>
+                    <div className="flex items-center justify-between" style={{ marginBottom: 6 }}>
+                      <span className="t-caption mono">{m.time}</span>
+                      <div style={{ width: 44, height: 4, borderRadius: 999, background: 'var(--border-subtle)' }}>
+                        <div style={{ width: `${m.imp * 100}%`, height: '100%', borderRadius: 999, background: m.imp > 0.7 ? 'var(--accent-cyan)' : m.imp > 0.4 ? 'var(--status-training)' : 'var(--text-tertiary)' }} />
+                      </div>
+                    </div>
+                    <div className="t-body" style={{ fontSize: 11 }}>{m.content}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {tab === 'plan' && (
+              <div className="flex flex-col" style={{ gap: 3 }}>
+                {plan.map((p, i) => (
+                  <div key={i} className="flex items-start" style={{ gap: 9, padding: '7px 8px', paddingLeft: 8 + p.i * 16, borderLeft: p.s === 'active' ? '2px solid var(--accent-cyan)' : '2px solid transparent', background: p.s === 'active' ? 'rgba(0,229,204,0.04)' : 'transparent', borderRadius: 4 }}>
+                    <span style={{ width: 6, height: 6, borderRadius: 999, marginTop: 4, flexShrink: 0, background: planColor[p.s] }} />
+                    <span className="t-body" style={{ fontSize: 11, color: p.s === 'pending' ? 'var(--text-tertiary)' : 'var(--text-secondary)' }}>{p.d}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  function Chat({ agent, setAgent }) {
+    const [msgs, setMsgs] = useState([]);
+    const [input, setInput] = useState('');
+    const [typing, setTyping] = useState(false);
+    const scrollRef = useRef(null);
+    useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [msgs, typing]);
+    const replies = {
+      gatherer: "I'm gathering oak near the forest — 12 logs in inventory, heading to the stockpile next.",
+      builder: 'Working on the village center. Could use more stone blocks if any are spare.',
+      farmer: "Crops are coming along. I'll have wheat ready for harvest within a few cycles.",
+      defender: 'Perimeter is secure. No hostile mobs detected within the arena bounds.',
+    };
+    const send = () => {
+      if (!input.trim()) return;
+      const t = new Date().toLocaleTimeString('en-US', { hour12: false });
+      setMsgs((m) => [...m, { id: Date.now(), sender: 'user', content: input.trim(), t }]);
+      setInput(''); setTyping(true);
+      setTimeout(() => {
+        setTyping(false);
+        setMsgs((m) => [...m, { id: Date.now() + 1, sender: 'agent', name: agent.name, role: agent.role, content: replies[agent.role], t: new Date().toLocaleTimeString('en-US', { hour12: false }) }]);
+      }, 1800);
+    };
+    return (
+      <Reveal delay={140} style={{ gridColumn: '1 / -1' }}>
+        <Card style={{ padding: 16, height: 210 }}>
+          <div className="flex" style={{ height: '100%', gap: 14 }}>
+            <div style={{ width: 184, flexShrink: 0, borderRight: '1px solid var(--border-subtle)', paddingRight: 14 }}>
+              <h4 className="t-label" style={{ marginBottom: 10 }}>Conversations</h4>
+              <div className="flex flex-col" style={{ gap: 3 }}>
+                {AIU.agents.map((a) => (
+                  <button key={a.id} onClick={() => setAgent(a.id)} className="flex items-center" style={{ gap: 9, height: 34, padding: '0 8px', borderRadius: 7, cursor: 'pointer', textAlign: 'left', background: a.id === agent.id ? 'rgba(0,229,204,0.06)' : 'transparent', border: '1px solid ' + (a.id === agent.id ? 'rgba(0,229,204,0.2)' : 'transparent') }}
+                    onMouseEnter={(e) => { if (a.id !== agent.id) e.currentTarget.style.background = 'rgba(255,255,255,0.03)'; }}
+                    onMouseLeave={(e) => { if (a.id !== agent.id) e.currentTarget.style.background = 'transparent'; }}>
+                    <Avatar role={a.role} name={a.name} size={22} ring={false} />
+                    <span className="t-body truncate" style={{ fontSize: 11, color: a.id === agent.id ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{a.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex flex-col flex-1" style={{ minWidth: 0 }}>
+              <div ref={scrollRef} className="flex-1 flex flex-col" style={{ gap: 8, overflowY: 'auto', marginBottom: 10, paddingRight: 4 }}>
+                {msgs.length === 0 && !typing && (
+                  <div className="flex-1 flex flex-col items-center justify-center" style={{ gap: 8 }}>
+                    <Icon name="message" size={22} style={{ color: 'var(--text-tertiary)' }} />
+                    <span className="t-caption">Message <span style={{ color: AIU.getRoleColor(agent.role) }}>@{agent.name}</span> — replies stream from the planner</span>
+                  </div>
+                )}
+                {msgs.map((m) => (
+                  <div key={m.id} className="flex" style={{ justifyContent: m.sender === 'user' ? 'flex-end' : 'flex-start' }}>
+                    <div style={{ maxWidth: '72%', padding: '8px 12px', borderRadius: 9, background: m.sender === 'user' ? 'var(--elevated)' : 'var(--surface-2)', borderLeft: m.sender === 'agent' ? `2px solid ${AIU.getRoleColor(m.role)}` : 'none' }}>
+                      {m.sender === 'agent' && <div className="flex items-center" style={{ gap: 8, marginBottom: 3 }}><span className="t-caption" style={{ color: AIU.getRoleColor(m.role), fontWeight: 500 }}>{m.name}</span><span className="t-caption mono">{m.t}</span></div>}
+                      <div className="t-body" style={{ fontSize: 11.5, lineHeight: 1.5, color: m.sender === 'user' ? 'var(--text-primary)' : 'var(--text-secondary)' }}>{m.content}</div>
+                    </div>
+                  </div>
+                ))}
+                {typing && (
+                  <div className="flex" style={{ justifyContent: 'flex-start' }}>
+                    <div style={{ padding: '9px 12px', borderRadius: 9, background: 'var(--surface-2)', borderLeft: `2px solid ${AIU.getRoleColor(agent.role)}` }}>
+                      <div className="flex items-center" style={{ gap: 4 }}>
+                        {[0, 1, 2].map((i) => <span key={i} style={{ width: 5, height: 5, borderRadius: 999, background: 'var(--text-tertiary)', animation: `blink 1s ${i * 0.2}s infinite` }} />)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center" style={{ gap: 9 }}>
+                <input className="inp flex-1" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && send()} placeholder={`@${agent.name} message...`} style={{ height: 34 }} />
+                <button onClick={send} className="flex items-center justify-center" style={{ width: 34, height: 34, borderRadius: 9, border: 'none', cursor: 'pointer', background: 'var(--accent-cyan)', color: 'var(--void)' }}><Icon name="send" size={13} /></button>
+              </div>
+            </div>
+          </div>
+        </Card>
+      </Reveal>
+    );
+  }
+
+  return function Spectate({ selectedAgentId, setSelectedAgentId }) {
+    const agent = AIU.agents.find((a) => a.id === selectedAgentId) || AIU.agents[0];
+    return (
+      <div className="grid12">
+        <WorldViewport />
+        <Inspector agent={agent} />
+        <Chat agent={agent} setAgent={setSelectedAgentId} />
+      </div>
+    );
+  };
+})();
+window.Spectate = Spectate;
+
+
+/* AI Utopia — Settings tab */
+const Settings = (function () {
+  const { useState } = React;
+  const { Card, Reveal, Toggle, Slider, Field, GhostButton, Icon } = window;
+
+  const subtabs = [['system', 'System', 'server'], ['environment', 'Environment', 'globe'], ['memory', 'Memory', 'database'], ['advanced', 'Advanced', 'cpu']];
+
+  function SystemTab() {
+    const ro = { color: 'var(--text-tertiary)' };
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 40, rowGap: 0 }}>
+        <Field label="Py4J Port" description="Port for the Py4J bridge socket"><input type="number" defaultValue={25099} className="inp" style={{ width: 110 }} /></Field>
+        <Field label="Minecraft Version" description="Pinned — UnionClef baseline"><div className="inp flex items-center" style={{ width: 110, ...ro }}>1.21.1</div></Field>
+        <Field label="Python Version" description="Required runtime"><div className="inp flex items-center" style={{ width: 110, ...ro }}>3.12</div></Field>
+        <Field label="Log Level" description="Console verbosity"><select className="inp" style={{ width: 130 }}><option>DEBUG</option><option selected>INFO</option><option>WARNING</option><option>ERROR</option></select></Field>
+        <Field label="Auto-save Interval" description="Seconds between checkpoints"><input type="number" defaultValue={300} className="inp" style={{ width: 110 }} /></Field>
+        <Field label="Theme" description="Interface appearance"><select className="inp" style={{ width: 130 }}><option>Void</option><option>Aurora</option><option>Minimal</option></select></Field>
+      </div>
+    );
+  }
+
+  function PathInput({ defaultValue }) {
+    return (
+      <div className="flex items-center" style={{ gap: 8, width: 360 }}>
+        <input className="inp flex-1" defaultValue={defaultValue} />
+        <button className="flex items-center justify-center" style={{ width: 36, height: 36, borderRadius: 9, cursor: 'pointer', background: 'var(--surface-2)', border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)' }}><Icon name="folder" size={13} /></button>
+      </div>
+    );
+  }
+
+  function EnvironmentTab() {
+    const [docker, setDocker] = useState(false);
+    return (
+      <div style={{ maxWidth: 620 }}>
+        <Field label="AIUTOPIA_ROOT" description="Project root directory"><PathInput defaultValue="/opt/ai-utopia" /></Field>
+        <Field label="ChromaDB Path" description="Vector database storage"><PathInput defaultValue="/opt/ai-utopia/chroma" /></Field>
+        <Field label="Identity DB Path" description="SQLite identity database"><PathInput defaultValue="/opt/ai-utopia/identity.db" /></Field>
+        <Field label="Checkpoints Path" description="Model checkpoint storage"><PathInput defaultValue="/opt/ai-utopia/checkpoints" /></Field>
+        <Field label="Docker Compose" description="Production deployment mode"><Toggle value={docker} onChange={setDocker} /></Field>
+        <div style={{ padding: '12px 0' }}>
+          <label className="t-label" style={{ display: 'block', marginBottom: 8 }}>JVM Arguments</label>
+          <textarea className="inp full mono" rows={5} style={{ fontSize: 11 }} defaultValue={'-XX:+UseZGC\n-XX:+ZGenerational\n-Xms4G\n-Xmx8G\n-Daiutopia.py4j.port=25099'} />
+        </div>
+      </div>
+    );
+  }
+
+  function MemoryTab() {
+    const [reranker, setReranker] = useState(false);
+    const [sim, setSim] = useState(0.75);
+    const [ctx, setCtx] = useState(10);
+    const collections = [['mem_01HABC...', '4,231 entries'], ['skill_lib_01HABC...', '892 entries'], ['mem_01HABD...', '3,104 entries'], ['skill_lib_01HABD...', '567 entries']];
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 40 }}>
+        <div>
+          <Field label="ChromaDB Connection" description="Database connectivity">
+            <span className="flex items-center" style={{ gap: 6, height: 32, padding: '0 12px', borderRadius: 9, background: 'rgba(0,229,204,0.08)', border: '1px solid rgba(0,229,204,0.3)', color: 'var(--accent-cyan)', fontSize: 11 }}><Icon name="check" size={12} /> Connected</span>
+          </Field>
+          <div style={{ marginTop: 14 }}>
+            <label className="t-label" style={{ display: 'block', marginBottom: 9 }}>Memory Collections</label>
+            <div className="flex flex-col" style={{ gap: 6 }}>
+              {collections.map(([n, s]) => (
+                <div key={n} className="soft flex items-center justify-between" style={{ padding: '9px 12px' }}>
+                  <span className="t-code mono">{n}</span><span className="t-caption">{s}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div>
+          <Field label="Embedding Model" description="Text embedding provider"><select className="inp" style={{ width: 200 }}><option>all-MiniLM-L6-v2</option><option>text-embedding-3</option><option>Local ONNX runtime</option></select></Field>
+          <Field label="Reranker" description="Cross-encoder reranking"><Toggle value={reranker} onChange={setReranker} /></Field>
+          <Field label="Similarity Threshold" description="Minimum relevance score"><div style={{ width: 150 }}><Slider value={sim} min={0} max={1} step={0.05} onChange={setSim} format={(v) => v.toFixed(2)} /></div></Field>
+          <Field label="Max Context Entries" description="Entries sent to LLM context"><div style={{ width: 150 }}><Slider value={ctx} min={1} max={50} step={1} onChange={setCtx} /></div></Field>
+        </div>
+      </div>
+    );
+  }
+
+  function AdvancedTab() {
+    const [workers, setWorkers] = useState(4);
+    const [bounds, setBounds] = useState(true);
+    const coord = (dv) => <input type="number" defaultValue={dv} className="inp" style={{ width: 64, padding: '0 8px' }} />;
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 40 }}>
+        <Field label="Determinism Seed" description="Reproducible random seed"><input type="text" defaultValue="42" className="inp" style={{ width: 110 }} /></Field>
+        <Field label="Parallel Workers" description="Training worker processes"><div style={{ width: 150 }}><Slider value={workers} min={1} max={8} step={1} onChange={setWorkers} /></div></Field>
+        <Field label="Arena Bounds" description="Restrict agent movement area"><Toggle value={bounds} onChange={setBounds} /></Field>
+        <Field label="Schema Version" description="Current plan schema"><div className="inp flex items-center" style={{ width: 110, color: 'var(--text-tertiary)' }}>1.0.0</div></Field>
+        {bounds && (
+          <React.Fragment>
+            <Field label="Min Coordinates" description="Arena minimum X, Y, Z"><div className="flex" style={{ gap: 8 }}>{coord(-256)}{coord(0)}{coord(-256)}</div></Field>
+            <Field label="Max Coordinates" description="Arena maximum X, Y, Z"><div className="flex" style={{ gap: 8 }}>{coord(256)}{coord(128)}{coord(256)}</div></Field>
+          </React.Fragment>
+        )}
+        <div className="flex items-center" style={{ gridColumn: '1 / -1', gap: 12, marginTop: 18, paddingTop: 18, borderTop: '1px solid var(--border-subtle)' }}>
+          <GhostButton color="var(--border-active)" style={{ color: 'var(--text-primary)' }}>Export Database</GhostButton>
+          <GhostButton color="var(--border-active)" style={{ color: 'var(--text-primary)' }}>Import Database</GhostButton>
+          <div className="flex-1" />
+          <GhostButton color="var(--status-offline)" icon="alert">Factory Reset</GhostButton>
+        </div>
+      </div>
+    );
+  }
+
+  const content = { system: SystemTab, environment: EnvironmentTab, memory: MemoryTab, advanced: AdvancedTab };
+
+  return function Settings() {
+    const [tab, setTab] = useState('system');
+    const Body = content[tab];
+    return (
+      <div className="grid12">
+        <Reveal style={{ gridColumn: '1 / -1' }}>
+          <Card style={{ padding: 20 }}>
+            <div className="flex" style={{ borderBottom: '1px solid var(--border-subtle)', marginBottom: 22, gap: 2 }}>
+              {subtabs.map(([k, l, ic]) => (
+                <button key={k} onClick={() => setTab(k)} className="flex items-center relative" style={{ gap: 8, padding: '10px 16px', cursor: 'pointer', background: 'transparent', border: 'none', fontSize: 12, color: tab === k ? 'var(--accent-cyan)' : 'var(--text-secondary)', fontWeight: tab === k ? 500 : 400 }}>
+                  <Icon name={ic} size={14} />{l}
+                  {tab === k && <span style={{ position: 'absolute', bottom: -1, left: 0, right: 0, height: 2, background: 'var(--accent-cyan)' }} />}
+                </button>
+              ))}
+            </div>
+            <div className="tab-fade" key={tab}><Body /></div>
+          </Card>
+        </Reveal>
+      </div>
+    );
+  };
+})();
+window.Settings = Settings;
+
+
+
+/* === shell === */
+/* AI Utopia — App shell: window chrome + horizontal tabs + status bar */
+const { useLayoutEffect } = React;
+
+const TABS = [
+  { id: 'dashboard', label: 'Dashboard', icon: 'activity' },
+  { id: 'botconfig', label: 'Bot Config', icon: 'cpu' },
+  { id: 'training', label: 'Training', icon: 'pulse' },
+  { id: 'spectate', label: 'Spectate', icon: 'map' },
+  { id: 'settings', label: 'Settings', icon: 'gear' },
+];
+
+const SUBTITLES = {
+  dashboard: 'Village Overview · 4 Agents Active',
+  botconfig: 'Agent Management · Spawn & Configure',
+  training: 'RL Pipeline · Epoch 1,247',
+  spectate: 'Live World View · Agent Observation',
+  settings: 'System Configuration',
+};
+
+function Clock() {
+  const [t, setT] = useState(new Date());
+  useEffect(() => { const i = setInterval(() => setT(new Date()), 1000); return () => clearInterval(i); }, []);
+  return <span className="t-data mono" style={{ fontSize: 15, color: 'var(--text-primary)' }}>{t.toLocaleTimeString('en-US', { hour12: false })}</span>;
+}
+
+function TabBar({ active, setActive }) {
+  const refs = useRef({});
+  const [ind, setInd] = useState({ left: 0, width: 0 });
+  useLayoutEffect(() => {
+    const el = refs.current[active];
+    if (el) setInd({ left: el.offsetLeft, width: el.offsetWidth });
+  }, [active]);
+  useEffect(() => {
+    const onResize = () => { const el = refs.current[active]; if (el) setInd({ left: el.offsetLeft, width: el.offsetWidth }); };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [active]);
+  return (
+    <div className="tabbar">
+      {TABS.map((t) => (
+        <button key={t.id} ref={(el) => (refs.current[t.id] = el)} onClick={() => setActive(t.id)} className={`tab ${active === t.id ? 'active' : ''}`}>
+          <Icon name={t.icon} size={15} className="tab-ico" />
+          {t.label}
+        </button>
+      ))}
+      <span className="tab-glow" style={{ left: ind.left, width: ind.width }} />
+      <span className="tab-indicator" style={{ left: ind.left + 14, width: Math.max(ind.width - 28, 10) }} />
+    </div>
+  );
+}
+
+function App() {
+  const [active, setActive] = useState('dashboard');
+  const [selectedAgentId, setSelectedAgentId] = useState('1');
+
+  const openAgent = (id) => { setSelectedAgentId(id); setActive('spectate'); };
+
+  const pages = {
+    dashboard: <window.Dashboard onOpenAgent={openAgent} />,
+    botconfig: <window.BotConfig />,
+    training: <window.Training />,
+    spectate: <window.Spectate selectedAgentId={selectedAgentId} setSelectedAgentId={setSelectedAgentId} />,
+    settings: <window.Settings />,
+  };
+
+  return (
+    <div className="desktop">
+      <div className="app-window">
+        {/* Title bar */}
+        <div className="titlebar">
+          <div className="brand">
+            <div className="diamond"><span>Ai</span></div>
+            <div>
+              <div className="wordmark">AI <b>UTOPIA</b></div>
+              <div className="brand-sub">Multi-Agent Village</div>
+            </div>
+          </div>
+          <div className="win-ctrls">
+            <div className="win-meta">
+              <div className="bridge-pill">
+                <window.StatusDot status="alive" size={6} />
+                <span className="lbl">BRIDGE ONLINE</span>
+              </div>
+              <Clock />
+            </div>
+            <button className="win-btn" title="Minimize"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><line x1="3" y1="9" x2="11" y2="9" /></svg></button>
+            <button className="win-btn" title="Maximize"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3"><rect x="3.2" y="3.2" width="7.6" height="7.6" rx="1.4" /></svg></button>
+            <button className="win-btn close" title="Close"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><line x1="3.5" y1="3.5" x2="10.5" y2="10.5" /><line x1="10.5" y1="3.5" x2="3.5" y2="10.5" /></svg></button>
+          </div>
+        </div>
+
+        {/* Tab bar */}
+        <TabBar active={active} setActive={setActive} />
+
+        {/* Content */}
+        <div className="content">
+          <div className="content-inner">
+            <div className="flex items-end justify-between" style={{ marginBottom: 22 }}>
+              <div>
+                <h1 className="t-hero">{TABS.find((t) => t.id === active).label}</h1>
+                <p className="t-caption" style={{ marginTop: 5, letterSpacing: '0.04em' }}>{SUBTITLES[active]}</p>
+              </div>
+            </div>
+            <div className="tab-fade" key={active}>{pages[active]}</div>
+          </div>
+        </div>
+
+        {/* Status bar */}
+        <div className="statusbar">
+          <span className="si"><window.StatusDot status="alive" size={6} pulse={false} /> Py4J 25099</span>
+          <span className="si" style={{ color: 'var(--text-tertiary)' }}>v21 · iter 4/200</span>
+          <span className="si" style={{ color: 'var(--status-training)' }}><window.Icon name="loader" size={10} className="spin" /> training</span>
+          <span className="spacer" />
+          <span className="si">RTX 4080 · 84% idle</span>
+          <span className="si">MC 1.21.1 · Fabric</span>
+          <span className="si" style={{ color: 'var(--accent-cyan)' }}>● 4 instances</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+</script>
+</body>
+</html>
