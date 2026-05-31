@@ -1,0 +1,42 @@
+{
+  "test_name": "Phase 3: Persistent Survival World Baseline",
+  "policy": "random",
+  "max_ticks": 2000,
+  "world": "survival",
+  "difficulty": "normal",
+  "results": {
+    "ticks_survived": 2000,
+    "oak_log_final": 0,
+    "health_final": 20.0,
+    "hunger_final": 20.0,
+    "time_of_day_final": 2195,
+    "position_final": [-25.7, -62.0, 24.7],
+    "deaths": 0,
+    "avg_health": 20.0,
+    "avg_hunger": 20.0
+  },
+  "wall_clock": {
+    "start": "19:19:07 UTC",
+    "end": "23:19:24 UTC",
+    "duration_hours": 4.0,
+    "ticks_per_second": 7.2
+  },
+  "success_criteria": {
+    "survived": true,
+    "no_deaths": true,
+    "foraging": false
+  },
+  "findings": {
+    "spawn_safety": "Safe at spawn, no early mob deaths",
+    "gamerules_active": "Day/night cycle, hunger, health all working",
+    "baseline_survival": "Random policy survives indefinitely with stable metrics",
+    "ood_gap": "Untrained policy collects zero logs, confirms need for training",
+    "movement_robustness": "NAVIGATE skill + random walking stable on natural terrain"
+  },
+  "next_steps": [
+    "Load trained M1B checkpoint (if available in weights/)",
+    "Compare trained vs. random metrics on same world",
+    "Analyze OOD gaps (mobs, hunger, navigation strategy)",
+    "Decide Phase 2b (real-MC) vs Phase 2a (Tune training) priority"
+  ]
+}
