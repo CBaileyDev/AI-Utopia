@@ -1,6 +1,11 @@
 """§7.3 — PettingZoo Parallel env wrapper.
 
-M0 limitations:
+NOTE (current state): the "M0 limitations" list below is HISTORICAL and superseded.
+As of M1 the wrapper is multi-role (active_roles config), computes real reward
+(env/reward.py), writes episodic memory (EpisodicMemoryWriter), and runs the
+ExploitDetector. Kept for changelog context; see the M1-Pipeline notes that follow.
+
+M0 limitations (SUPERSEDED — historical only):
   - gatherer role only
   - reward computation deferred to M1 (returns 0.0 stub)
   - episodic memory writes deferred to M1 (stub no-op)

@@ -149,7 +149,7 @@ class AiUtopiaRoleRLModule(TorchRLModule, ValueFunctionAPI):
         # Flatten time back into batch for the actor head
         hidden_flat = backbone_out.reshape(-1, backbone_out.size(-1))  # (B*T, 256)
         goal_flat   = obs_flat_t["goal_embedding"]                       # (B*T, 512)
-        action_dist_inputs_flat = self.actor_head(hidden_flat, goal_flat)  # (B*T, 340)
+        action_dist_inputs_flat = self.actor_head(hidden_flat, goal_flat)  # (B*T, 344)
 
         # Restore time dim for RLlib if we had one
         if time_dimension:
