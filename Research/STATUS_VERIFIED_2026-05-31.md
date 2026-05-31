@@ -26,10 +26,24 @@ Everything below was checked against running code, not docs.
 - **Phase 2 RLModules** (gatherer/explorer/farmer) + **multi_agent_config** — build correctly
   (`multi_agent_config(roles=[...])`, keyword-only).
 
-## In progress
+## RESULT: first verified clean convergence + gate number
 
-- **200-iter sim gatherer run** (seed 1, eval@50) launched 2026-05-31 07:48 → `Research/train-sim-200.log`.
-  Goal: first real learning slope + gate-metric reading on a clean task.
+- **200-iter sim gatherer run** (seed 1) — clean learning slope, converged by ~iter 30:
+  return 4.7 → 21.8 → 99.7 → **127.2** (min 126.2, max 127.4; ~2/log × 64 ≈ 128 ideal,
+  so ~63 oak_log collected every episode). Entropy 8.39 (finite — NOT the ~200→NaN
+  dead-channel bug from M1B history); KL 0.0086 (stable). No NaN, no collapse.
+- **Gate metric (after the eval-backend fix):** re-ran the 3 M1 gate scenarios against
+  the converged checkpoint in the sim → **success_rate = 0.667 (2/3 seeds pass)**.
+  This is the first real nonzero gate reading. (The in-loop eval logged 0.0 because the
+  scenario runner was hardwired to real-MC — fixed; see commit 697b4e3.)
+
+## Bugs found + fixed this session (all real, all verified)
+
+1. Eval scenario runner ignored backend → sim policy scored on empty production server
+   (commit 697b4e3). Was the cause of every "success_rate 0.0".
+2. phase3 read absent `obs['oak_log']` → always 0; now scans inventory id 132 (83f295b).
+3. phase2b harness passed ignored `py4j_port` + no `active_roles` → only gatherer on
+   wrong port (83f295b).
 
 ## Honest open questions
 
