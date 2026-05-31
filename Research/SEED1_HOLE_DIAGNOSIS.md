@@ -54,7 +54,32 @@ as the fix — it changes the obs (bearing cue), the arena (clusters, half=34), 
 distance shaping, and per config.py:144 demotes HARVEST to mine cobblestone, which is
 incoherent with the oak_log gate predicate. Keep the task fixed; remove only the shortcut.
 
-## Status
-Diagnosis complete + parity-verified. The fix is a non-trivial training run (next
-session): retrain with the shortcut removed, then re-eval all 3 gate seeds expecting
-non-degenerate skill usage (NAVIGATE present) and 3/3.
+## DECISIVE evidence (skill logits, final checkpoint)
+Both seeds produce IDENTICAL skill logits:
+`HARVEST=8.98, SEARCH=-2.51, NOOP=-3.14, NAVIGATE<-3.14`.
+- seed_2: HARVEST unmasked → argmax=HARVEST → the skill `_walk_into_reach`'s each log
+  internally and collects all 64 in one dispatch. ✓
+- seed_1: HARVEST masked → argmax over unmasked skills = **SEARCH** (next-highest), which
+  does nothing → repeats 120 steps → oak=0. ✗
+
+NAVIGATE's logit is BELOW SEARCH, so when HARVEST is masked the policy never chooses to
+move — it has **near-zero learned NAVIGATE preference**. It is a pure HARVEST button-presser.
+
+## Corrected mechanism (the skill walks; the mask is fine)
+`_apply_harvest` (skills.py:194-211) loops `_nearest_alive_log` → `_walk_into_reach` →
+break, up to `cap≈64` logs per dispatch. So HARVEST itself does the walking; the policy
+needs only to (a) get close enough to unmask HARVEST, then (b) press it. On seed_1 the
+trunk base is 3.61b away — ONE NAVIGATE unmasks HARVEST and the skill finishes the job.
+The mask (topmost-column ≤4.5) is doing its job: "too far, move first." The defect is
+purely that the policy learned to press HARVEST and SEARCH, never NAVIGATE — because
+randomized training layouts almost always gift a topmost-in-reach trunk at spawn, so the
+"masked → must navigate" state was effectively never in the training distribution.
+
+## Status — DECISIVELY diagnosed (not a code bug; a training-distribution gap)
+Env, mask, and skill are all correct and sim↔real faithful. The fix is a training change,
+cleanly scoped and NON-confounded: ensure a meaningful fraction of training episodes spawn
+with HARVEST masked (e.g. spawn the agent ≥~5b from the nearest trunk top, or bias layouts
+so no trunk is topmost-in-reach at t=0). Then the policy must learn NAVIGATE→HARVEST.
+Re-eval expecting NAVIGATE present in skill usage and gate 3/3. This does NOT require
+touching obs/mask/skill code or Java (parity preserved). Estimated: one sim training run
+(~15 min) + re-eval, next session.
