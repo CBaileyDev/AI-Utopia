@@ -94,6 +94,8 @@ def main() -> None:
                              "HARVEST masked, so jittered masked spawns are solvable.")
     parser.add_argument("--entropy-coeff", type=float, default=0.01,
                         help="(sim only) PPO entropy_coeff; raise to keep NAVIGATE explored.")
+    parser.add_argument("--force-masked-spawn", action="store_true",
+                        help="(sim only) force every training episode to start HARVEST-masked.")
     args = parser.parse_args()
 
     paths = Paths.from_env(); paths.ensure()
@@ -122,6 +124,7 @@ def main() -> None:
             spawn_jitter=args.spawn_jitter,
             approach_shaping=args.approach_shaping,
             entropy_coeff=args.entropy_coeff,
+            force_masked_spawn=args.force_masked_spawn,
         )
     else:
         # M2 multi-role MAPPO

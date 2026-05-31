@@ -195,6 +195,13 @@ class AiUtopiaSimEnv(ParallelEnv):
         # randomize_layout (training) path; fixed-seed eval/transfer never jitter, so the
         # gate scenarios and Java parity are untouched.
         self._spawn_jitter = float(config.get("spawn_jitter", 0.0))
+        # force_masked_spawn (sim training): GUARANTEE every training episode starts
+        # HARVEST-masked by pushing the agent away from the nearest trunk until its
+        # topmost log is out of reach. 100% masked => NAVIGATE is the ONLY path to
+        # reward, so it cannot be drowned by easy in-reach episodes (the basin that
+        # defeated 23%-jitter). Strongest curriculum lever; training-only, eval never
+        # forces. Pairs with approach_shaping for the dense approach gradient.
+        self._force_masked_spawn = bool(config.get("force_masked_spawn", False))
         # approach_shaping (sim-only, training): PBRS distance-reduction toward the
         # nearest log applied ONLY while HARVEST is masked (nearest trunk's topmost log
         # > reach). Telescopes to W*(dist_start - dist_end) over a masked run = pure
@@ -289,6 +296,23 @@ class AiUtopiaSimEnv(ParallelEnv):
                     np.clip(world.agent_pos[2] + off[1],
                             _ARENA_CENTER_Z - half, _ARENA_CENTER_Z + half)
                 )
+            # force_masked_spawn: shove the agent outward from the nearest trunk
+            # until HARVEST is masked (topmost-column dist > reach). Keeps the trunk in
+            # the 16b perception window so NAVIGATE stays learnable. Training-only.
+            if self._force_masked_spawn and self._randomize_layout:
+                from aiutopia.sim.obs_adapter import REACH_RADIUS_BLOCKS, gatherer_nearest_columns
+                half = self._arena_half
+                for _ in range(40):
+                    _ct, nb = gatherer_nearest_columns(world)
+                    if not nb or math.sqrt(nb[0][5]) > REACH_RADIUS_BLOCKS:
+                        break  # already masked (or nothing in perception)
+                    # push directly away from the nearest perceived trunk by 1 block
+                    dx0 = nb[0][2]; dz0 = nb[0][4]
+                    nrm = math.hypot(dx0, dz0) or 1.0
+                    world.agent_pos[0] = float(np.clip(world.agent_pos[0] - dx0 / nrm,
+                        _ARENA_CENTER_X - half, _ARENA_CENTER_X + half))
+                    world.agent_pos[2] = float(np.clip(world.agent_pos[2] - dz0 / nrm,
+                        _ARENA_CENTER_Z - half, _ARENA_CENTER_Z + half))
             # Fresh scout per episode (new exploration memory) before _build_obs,
             # which reads self._scouts[agent] in "real" mode.
             if self._scout_mode == "real":

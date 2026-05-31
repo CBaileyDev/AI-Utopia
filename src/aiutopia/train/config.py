@@ -280,6 +280,9 @@ def m1_gatherer_config(
     # entropy_coeff override (sim only): raise above 0.01 to keep NAVIGATE exploration
     # alive past the ~iter-25 HARVEST-press basin lock-in (seed_1 work).
     entropy_coeff: float = 0.01,
+    # force_masked_spawn (sim only): guarantee EVERY training episode starts
+    # HARVEST-masked so NAVIGATE is the only reward path (strongest seed_1 curriculum).
+    force_masked_spawn: bool = False,
 ) -> PPOConfig:
     """Section 7.1 M1 single-agent gatherer PPO config (new API stack).
 
@@ -317,6 +320,7 @@ def m1_gatherer_config(
             # Training-only agent-spawn jitter (0 = off). See m1_gatherer_config docstring.
             "spawn_jitter": spawn_jitter,
             "approach_shaping": approach_shaping,
+            "force_masked_spawn": force_masked_spawn,
             **(
                 {
                     # M2: the POLICY drives instance-selection + blind-explore.
