@@ -33,9 +33,18 @@ Everything below was checked against running code, not docs.
   so ~63 oak_log collected every episode). Entropy 8.39 (finite — NOT the ~200→NaN
   dead-channel bug from M1B history); KL 0.0086 (stable). No NaN, no collapse.
 - **Gate metric (after the eval-backend fix):** re-ran the 3 M1 gate scenarios against
-  the converged checkpoint in the sim → **success_rate = 0.667 (2/3 seeds pass)**.
-  This is the first real nonzero gate reading. (The in-loop eval logged 0.0 because the
-  scenario runner was hardwired to real-MC — fixed; see commit 697b4e3.)
+  the converged checkpoint in the sim. Predicate is strict (`_inventory_from_obs`, count
+  only `oak_log`, require ≥64 — the old slot-sum false-pass is deleted). Verified per-seed
+  oak_log counts (not just the aggregate):
+  - seed_1: **0 oak_log → FAIL** (total failure on this fixed layout)
+  - seed_2: **64 → pass**
+  - seed_3: **64 → pass**
+  → **success_rate = 0.667 (2/3 fixed seeds)**. Real, not an artifact. n=3, so one seed
+  flip = ±0.33. The M1 gate threshold is higher than 0.667, so this is **approaching gate,
+  NOT gate-passed** — and seed_1 collecting *zero* is a real generalization hole worth
+  chasing next (one layout the policy never solves), not measurement noise.
+  (The in-loop eval logged 0.0 because the scenario runner was hardwired to real-MC —
+  fixed; see commit 697b4e3.)
 
 ## Bugs found + fixed this session (all real, all verified)
 
