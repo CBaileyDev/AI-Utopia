@@ -121,3 +121,29 @@ so no trunk is topmost-in-reach at t=0). Then the policy must learn NAVIGATE→H
 Re-eval expecting NAVIGATE present in skill usage and gate 3/3. This does NOT require
 touching obs/mask/skill code or Java (parity preserved). Estimated: one sim training run
 (~15 min) + re-eval, next session.
+
+## Fix attempt 3 — jitter=10 + approach_shaping + entropy_coeff=0.05: INCONCLUSIVE + still-failing
+Raised entropy_coeff 0.01->0.05 to keep NAVIGATE explored past the iter-25 basin lock.
+Run ERRORED at iter 92 (numpy batch-alloc fail in RLlib's learner connector: "Unable to
+allocate 2.13 MiB ... shape (484,32,36)") — higher entropy -> more exploration -> episodes
+don't terminate early -> larger/longer batches -> a Windows memory spike in space_utils
+fast_stack. So not a clean 200-iter result.
+
+But the iter-50 checkpoint still scores GATE 0.667 (seed_1=0), and seed_1 skill logits show
+NAVIGATE at -5.43 (DEAD-LAST) even though entropy stayed ~13.8 and the OTHER logits
+flattened (HARV 8.9->2.18, rest ~0). So the policy explores broadly but SPECIFICALLY avoids
+NAVIGATE — learned anti-correlation (NAVIGATE never earned reward in its experience), not a
+breadth problem. Entropy alone cannot fix a directionally-suppressed action.
+
+## Verdict after 3 attempts: needs a real curriculum, not a knob
+jitter-alone, jitter+approach_shaping, and jitter+approach+entropy all leave seed_1=0 and
+NAVIGATE suppressed. The HARVEST-press basin is deep and NAVIGATE is actively avoided.
+Cracking it requires making NAVIGATE the ONLY path to reward in a sustained fraction of
+training (e.g. a 100%-masked curriculum PHASE that anneals, or a behavior-cloning warm-start
+seeded with navigate->harvest demos) — deliberate multi-run work, deferred.
+
+Also fix before the next long run: cap episode length / batch size when entropy_coeff is
+raised, or the Windows fast_stack alloc spike recurs (attempt-3 crash).
+
+Operational note: gate is 0.667 = 2/3 fixed seeds collecting a clean 64 oak_log; seed_1 is
+the lone degenerate-layout failure. That is real M1 progress, independent of the seed_1 hole.
