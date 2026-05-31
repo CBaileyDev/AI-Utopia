@@ -86,6 +86,9 @@ def main() -> None:
                         help="(real backend only) Train on natural Minecraft world: "
                              "peaceful=True (no mobs), arena_bounds_check=False (lift truncation), "
                              "tick_warp=True (for speed).")
+    parser.add_argument("--spawn-jitter", type=float, default=0.0,
+                        help="(sim only) +/- blocks to jitter agent spawn each training "
+                             "episode so some start HARVEST-masked, forcing NAVIGATE learning.")
     args = parser.parse_args()
 
     paths = Paths.from_env(); paths.ensure()
@@ -111,6 +114,7 @@ def main() -> None:
             num_envs_per_env_runner=args.num_envs_per_runner,
             decision_core=args.decision_core,
             natural_world=args.natural_world,
+            spawn_jitter=args.spawn_jitter,
         )
     else:
         # M2 multi-role MAPPO

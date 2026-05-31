@@ -181,6 +181,15 @@ class AiUtopiaSimEnv(ParallelEnv):
         #     ONLY what the agent has perceived. resource_bearing_cue is FORCED OFF
         #     in this mode so a None scout bearing can never leak the oracle.
         #   "off": no bearing (all-zeros), regardless of resource_bearing_cue.
+        # spawn_jitter (sim-only, TRAINING-only): horizontal ± blocks to displace the
+        # agent start each episode. Default 0 = unchanged (fixed SPAWN_POS, byte-faithful
+        # to Java/golden-trace). Purpose: with jitter the agent sometimes spawns with NO
+        # trunk topmost-in-reach (HARVEST masked at t=0), so the policy must learn
+        # NAVIGATE->HARVEST instead of the degenerate HARVEST-press strategy that fails
+        # the seed_1 gate (see Research/SEED1_HOLE_DIAGNOSIS.md). Applied ONLY on the
+        # randomize_layout (training) path; fixed-seed eval/transfer never jitter, so the
+        # gate scenarios and Java parity are untouched.
+        self._spawn_jitter = float(config.get("spawn_jitter", 0.0))
         self._scout_mode = str(config.get("scout_mode", "oracle"))
         if self._scout_mode not in ("oracle", "real", "sweep", "off"):
             raise ValueError(
@@ -250,6 +259,22 @@ class AiUtopiaSimEnv(ParallelEnv):
         for agent in self.agents:
             world = self.worlds[agent]
             world.reset(int(seed), arena_mode=self._arena_mode)
+            # TRAINING-only spawn jitter (see __init__): displace the agent start so a
+            # fraction of episodes begin with HARVEST masked, forcing NAVIGATE learning.
+            # Only on randomize_layout (training); fixed-seed eval keeps the canonical
+            # SPAWN_POS so gate scenarios + Java parity are unaffected.
+            if self._spawn_jitter > 0.0 and self._randomize_layout:
+                jr = np.random.default_rng(int(seed) * 2654435761 & 0xFFFFFFFF)
+                off = jr.uniform(-self._spawn_jitter, self._spawn_jitter, size=2)
+                half = self._arena_half
+                world.agent_pos[0] = float(
+                    np.clip(world.agent_pos[0] + off[0],
+                            _ARENA_CENTER_X - half, _ARENA_CENTER_X + half)
+                )
+                world.agent_pos[2] = float(
+                    np.clip(world.agent_pos[2] + off[1],
+                            _ARENA_CENTER_Z - half, _ARENA_CENTER_Z + half)
+                )
             # Fresh scout per episode (new exploration memory) before _build_obs,
             # which reads self._scouts[agent] in "real" mode.
             if self._scout_mode == "real":

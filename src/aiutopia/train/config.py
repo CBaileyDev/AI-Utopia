@@ -268,6 +268,11 @@ def m1_gatherer_config(
     # tick_warp=True (keep tick-warp for speed; drowning now survivable via
     # water_breathing, so no unobservable-death blocker).
     natural_world: bool = False,
+    # spawn_jitter (sim backend only): ± horizontal blocks to displace the agent
+    # spawn each TRAINING episode, so a fraction start with HARVEST masked and the
+    # policy must learn NAVIGATE->HARVEST (fixes the seed_1 HARVEST-press degeneracy;
+    # see Research/SEED1_HOLE_DIAGNOSIS.md). 0 = unchanged. Eval never jitters.
+    spawn_jitter: float = 0.0,
 ) -> PPOConfig:
     """Section 7.1 M1 single-agent gatherer PPO config (new API stack).
 
@@ -302,6 +307,8 @@ def m1_gatherer_config(
             # full layout distribution (not a single-layout overfit); eval/transfer
             # pass fixed seeds and never set this.
             "randomize_layout": True,
+            # Training-only agent-spawn jitter (0 = off). See m1_gatherer_config docstring.
+            "spawn_jitter": spawn_jitter,
             **(
                 {
                     # M2: the POLICY drives instance-selection + blind-explore.
