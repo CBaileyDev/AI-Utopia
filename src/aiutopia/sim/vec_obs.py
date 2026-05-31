@@ -66,7 +66,14 @@ def gatherer_nearest_columns_batched(logs, log_alive, agent_pos):
         np.broadcast_to(cx, (1, _W, _W)) * _W + np.broadcast_to(cz, (1, _W, _W))
     ).astype(np.int64)
     key = np.where(in_scan, distsq * _NCELL + cellkey, _BIG_KEY).reshape(B, -1)
-    order = np.argsort(key, axis=1, kind="stable")[:, :8]
+    # Top-8 nearest by composite key. argpartition pulls the 8 smallest (unordered)
+    # in O(NCELL) instead of a full O(NCELL log NCELL) argsort, then we sort ONLY
+    # those 8. Valid cells have a unique total-order key (distsq*NCELL+cellkey), so
+    # the sorted-8 are byte-identical to argsort(key)[:, :8]; the only ties are the
+    # invalid _BIG_KEY cells, which sel_valid zeroes out -> their order is moot.
+    part = np.argpartition(key, 8, axis=1)[:, :8]
+    part_keys = np.take_along_axis(key, part, axis=1)
+    order = np.take_along_axis(part, np.argsort(part_keys, axis=1, kind="stable"), axis=1)
 
     cdx_flat = np.broadcast_to(cdx, (B, _W, _W)).reshape(B, -1)
     cdz_flat = np.broadcast_to(cdz, (B, _W, _W)).reshape(B, -1)

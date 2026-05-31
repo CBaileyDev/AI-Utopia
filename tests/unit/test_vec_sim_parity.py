@@ -206,6 +206,61 @@ def test_vec_sim_autoreset_on_success() -> None:
         )
 
 
+def test_vec_sim_partial_autoreset_subset() -> None:
+    """Mixed done/not-done in one step: only done rows get fresh-reset obs.
+
+    Subset-autoreset regression (Fix 3): env 0 clears the arena (cap 64 ->
+    terminate -> autoreset); env 1 takes one log (stays live). The done subset
+    (m=1 < B=2) rebuilds obs for env 0 only -> equals a fresh reset, while env 1
+    equals a live env that did the same cap-1 harvest. A done-count != num_envs
+    previously crashed the mask builder (it sized to B).
+    """
+    seeds = np.array([1, 2], dtype=np.int64)
+    B = len(seeds)
+    vec = VecGathererSim(num_envs=B, max_episode_ticks=_MAX_TICKS)
+    vec.reset(seeds)
+
+    cap1 = _cap1_scalar()
+    mixed = {
+        "skill_type": np.full(B, 1, dtype=np.int64),  # both HARVEST
+        "target_class": np.zeros(B, dtype=np.int64),
+        "spatial_param": np.zeros((B, 3), dtype=np.float32),
+        # env 0: cap 64 (clears arena -> terminate); env 1: cap 1 (stays live).
+        "scalar_param": np.array([[1.0], [cap1]], dtype=np.float32),
+        "should_broadcast": np.zeros(B, dtype=np.int64),
+        "comm_payload": np.zeros((B, 1), dtype=np.float32),
+        "comm_target_mask": np.zeros((B, 4), dtype=np.int8),
+    }
+    obs, _rew, term, trunc = vec.step(mixed)
+    assert bool(term[0]) and not bool(term[1]), "env0 terminates, env1 stays live"
+    assert not bool(trunc[0]) and not bool(trunc[1])
+
+    # env 0 row == a fresh reset of seed 1.
+    fresh = VecGathererSim(num_envs=1, max_episode_ticks=_MAX_TICKS)
+    fresh_obs = fresh.reset(np.array([seeds[0]], dtype=np.int64))
+    for key in ("position", "inv_slot_counts", "g_resource_grid", "g_nearest_resources"):
+        assert np.array_equal(obs[key][0], fresh_obs[key][0]), f"done row {key}"
+    for mk in ("skill_type", "target_per_skill"):
+        assert np.array_equal(obs["action_mask"][mk][0], fresh_obs["action_mask"][mk][0]), mk
+
+    # env 1 row == a live env (seed 2) that did the SAME cap-1 harvest (NOT reset).
+    live = VecGathererSim(num_envs=1, max_episode_ticks=_MAX_TICKS)
+    live.reset(np.array([seeds[1]], dtype=np.int64))
+    live_obs, _lr, _lt, _ltr = live.step(
+        {
+            "skill_type": np.full(1, 1, dtype=np.int64),
+            "target_class": np.zeros(1, dtype=np.int64),
+            "spatial_param": np.zeros((1, 3), dtype=np.float32),
+            "scalar_param": np.array([[cap1]], dtype=np.float32),
+            "should_broadcast": np.zeros(1, dtype=np.int64),
+            "comm_payload": np.zeros((1, 1), dtype=np.float32),
+            "comm_target_mask": np.zeros((1, 4), dtype=np.int8),
+        }
+    )
+    for key in ("position", "inv_slot_counts", "g_resource_grid", "g_nearest_resources"):
+        assert np.array_equal(obs[key][1], live_obs[key][0]), f"live row {key}"
+
+
 def test_vec_sim_throughput_b512() -> None:
     """Report B=512 env-steps/s on the cap-1 HARVEST hot path (informational)."""
     B = 512

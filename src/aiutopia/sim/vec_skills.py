@@ -38,8 +38,6 @@ from __future__ import annotations
 
 import numpy as np
 
-from aiutopia.sim.world import SimWorld
-
 WALK_PER_TICK = 4.3 / 20.0
 HARVEST_REACH = 4.5
 _HARVEST_REACH_SQ = HARVEST_REACH * HARVEST_REACH + 1e-3
@@ -162,30 +160,38 @@ def _harvest_chain(
 
 
 def vec_apply_skills(
-    worlds: list[SimWorld],
     skill_type: np.ndarray,
     target_class: np.ndarray,
     spatial: np.ndarray,
     scalar: np.ndarray,
+    agent_pos: np.ndarray,
+    log_alive: np.ndarray,
+    logs: np.ndarray,
+    oak: np.ndarray,
 ) -> np.ndarray:
-    """Advance B worlds one macro-action each, vectorized over B; mutate in place.
+    """Advance B envs one macro-action each, vectorized over B; mutate arrays in place.
 
-    worlds: list[SimWorld] (mutated: agent_pos, log_alive, inventory["oak_log"]).
+    BATCHED-ARRAY STATE (no per-env SimWorld objects): the caller owns contiguous
+    numpy state and passes it directly, so this never stacks python objects.
+      agent_pos: (B,3) float64  -- mutated in place (NAVIGATE / HARVEST walk).
+      log_alive: (B,n) bool     -- mutated in place (HARVEST kills logs).
+      logs:      (B,n,3) int64  -- read-only (block coords).
+      oak:       (B,) int64     -- mutated in place (oak_log count += broken).
     skill_type/target_class: (B,) int. spatial: (B,3) float (raw). scalar: (B,) or
     (B,k) float (raw; first col read). Returns n_clipped (B,) int -- popcount of the
     per-env clippedAxesBitset with the scalar path per-skill selectivity. tick is
     left untouched (owned by VecGathererSim, as in the scalar path).
+
+    Per-env selectivity is preserved by index slicing exactly as the old worlds-list
+    path did: only nav_idx rows of agent_pos move on NAVIGATE; only harv_idx rows of
+    agent_pos/log_alive/oak change on HARVEST; all other envs' arrays are untouched.
     """
-    B = len(worlds)
+    B = agent_pos.shape[0]
     skill_type = np.asarray(skill_type).reshape(-1).astype(np.int64)
     target_class = np.asarray(target_class).reshape(-1).astype(np.int64)
     spatial = np.asarray(spatial, dtype=np.float64).reshape(B, 3)
     scalar_col = np.asarray(scalar, dtype=np.float64).reshape(B, -1)[:, 0]
 
-    pos = np.stack([w.agent_pos for w in worlds]).astype(np.float64)
-    alive = np.stack([w.log_alive for w in worlds]).astype(bool)
-    logs = np.stack([w.logs for w in worlds]).astype(np.int64)
-    oak = np.array([int(w.inventory.get("oak_log", 0)) for w in worlds], dtype=np.int64)
     n_clipped = np.zeros(B, dtype=np.int64)
 
     is_harvest = skill_type == SKILL_HARVEST
@@ -195,11 +201,11 @@ def vec_apply_skills(
         nav_idx = np.nonzero(is_navigate)[0]
         sp_clamped, sp_clip_pc = _clip_spatial_popcount(spatial[nav_idx])
         n_clipped[nav_idx] = sp_clip_pc
-        origin = pos[nav_idx]
+        origin = agent_pos[nav_idx]
         target = origin + sp_clamped * np.array(
             [MAX_NAV_RANGE, NAV_VERT_RANGE, MAX_NAV_RANGE], dtype=np.float64
         )
-        pos[nav_idx] = _closed_form_walk(
+        agent_pos[nav_idx] = _closed_form_walk(
             origin, target, NAV_ARRIVAL, NAV_ARRIVAL, squared_test=False
         )
 
@@ -210,12 +216,6 @@ def vec_apply_skills(
         cap = np.maximum(1, np.rint(sc_clamped * MAX_QUANTITY).astype(np.int64))
         oak_class = target_class[harv_idx] == OAK_LOG_TARGET_CLASS
         cap = np.where(oak_class, cap, 0)
-        _harvest_chain(harv_idx, cap, pos, alive, logs, oak)
-
-    for j, w in enumerate(worlds):
-        w.agent_pos = pos[j]
-        if is_harvest[j]:
-            w.log_alive = alive[j].copy()
-            w.inventory["oak_log"] = int(oak[j])
+        _harvest_chain(harv_idx, cap, agent_pos, log_alive, logs, oak)
 
     return n_clipped

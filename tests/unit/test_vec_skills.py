@@ -26,6 +26,24 @@ def _fresh_worlds(seeds):
     return ws
 
 
+def _apply_to_worlds(worlds, skill_type, target_class, spatial, scalar):
+    """Adapter: stack the worlds into batched arrays, run the array-based
+    vec_apply_skills, write the mutated arrays back onto the worlds, and return
+    n_clipped -- so the per-world parity assertions below are unchanged."""
+    agent_pos = np.stack([w.agent_pos for w in worlds]).astype(np.float64)
+    log_alive = np.stack([w.log_alive for w in worlds]).astype(bool)
+    logs = np.stack([w.logs for w in worlds]).astype(np.int64)
+    oak = np.array([int(w.inventory.get("oak_log", 0)) for w in worlds], dtype=np.int64)
+    n_clipped = vec_apply_skills(
+        skill_type, target_class, spatial, scalar, agent_pos, log_alive, logs, oak
+    )
+    for j, w in enumerate(worlds):
+        w.agent_pos = agent_pos[j]
+        w.log_alive = log_alive[j].copy()
+        w.inventory["oak_log"] = int(oak[j])
+    return n_clipped
+
+
 def _popcount(bitset: int) -> int:
     return bin(int(bitset)).count("1")
 
@@ -65,7 +83,7 @@ def test_vec_apply_skills_matches_scalar_per_world() -> None:
         spatial = np.tile(np.asarray(sp, dtype=np.float64), (B, 1))
         scalar = np.full((B, 1), sc, dtype=np.float64)
 
-        n_clipped = vec_apply_skills(vec_worlds, skill_type, target_class, spatial, scalar)
+        n_clipped = _apply_to_worlds(vec_worlds, skill_type, target_class, spatial, scalar)
 
         for i in range(B):
             action = {
@@ -106,7 +124,7 @@ def test_vec_apply_skills_chained_sequence() -> None:
         target_class = np.full(B, tc, dtype=np.int64)
         spatial = np.tile(np.asarray(sp, dtype=np.float64), (B, 1))
         scalar = np.full((B, 1), sc, dtype=np.float64)
-        vec_apply_skills(vec_worlds, skill_type, target_class, spatial, scalar)
+        _apply_to_worlds(vec_worlds, skill_type, target_class, spatial, scalar)
         for i in range(B):
             action = {
                 "skill_type": int(st),
@@ -141,7 +159,7 @@ def test_vec_apply_skills_mixed_skill_types() -> None:
     target_class = np.asarray(tcs, dtype=np.int64)
     spatial = np.asarray(sps, dtype=np.float64)
     scalar = np.asarray(scs, dtype=np.float64).reshape(B, 1)
-    n_clipped = vec_apply_skills(vec_worlds, skill_type, target_class, spatial, scalar)
+    n_clipped = _apply_to_worlds(vec_worlds, skill_type, target_class, spatial, scalar)
 
     for i in range(B):
         action = {

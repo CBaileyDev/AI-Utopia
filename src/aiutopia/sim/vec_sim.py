@@ -6,18 +6,27 @@ gatherer path (no decision_core, no scout, no shaping flags) -- the M1 gate path
 Per-env parity vs the scalar env is the hard acceptance gate
 (tests/unit/test_vec_sim_parity.py).
 
-DESIGN (staged, parity-protected): skill dynamics are advanced by looping the
-EXISTING scalar apply_skill over B independent SimWorld instances -- bit-identical
-by construction, so the float-precision-sensitive walk loops (a documented project
-gotcha) cannot drift. The speedup is in the OBS + REWARD + termination layers, which
-ARE vectorized: a single batched gatherer_nearest_columns_batched pass (the
-~65%%-of-step-time topmost-column scan), a closed-form numpy reward proven equal to
+DESIGN (batched-array state, parity-protected): world state lives as CONTIGUOUS
+numpy arrays over B -- agent_pos (B,3), logs (B,n,3), log_alive (B,n), oak (B,),
+tick (B,) -- NOT a list of B scalar SimWorld objects. reset() builds the byte-faithful
+_JavaRandom arena per env via SimWorld(seed).reset ONCE, then copies it into the
+arrays; step() / _build_obs() then read+write the arrays directly, with ZERO per-step
+np.stack over python objects and ZERO per-env list-comprehensions in the hot path.
+Skill dynamics run via vec_skills.vec_apply_skills, which mutates those same arrays
+in place with the float-precision-sensitive walk written in CLOSED FORM (fuzzed equal
+to the scalar walk loop to ~1e-13, well under the parity atol), so the documented
+walk-stall gotcha cannot drift. Obs + reward + termination are likewise vectorized: a
+single batched gatherer_nearest_columns_batched pass (the ~65%-of-step-time topmost-
+column scan, top-8 via argpartition), a closed-form numpy reward proven equal to
 compute_reward_stage_1 (gatherer), and boolean term/trunc masks.
 
 AUTO-RESET: step() auto-resets envs that terminated/truncated and returns the FRESH
 reset obs for those rows; last_episode_return / last_episode_length carry the
-just-finished episode stats (NaN / -1 otherwise). The parity test compares only
-NON-terminating steps so the substitution never contaminates the dynamics check.
+just-finished episode stats (NaN / -1 otherwise). Obs is built ONCE per step over all
+B; _autoreset then re-seeds the done envs' state arrays and rebuilds obs for the DONE
+SUBSET ONLY (no second full-B build), scattering those fresh-reset rows back in. The
+parity test compares only NON-terminating steps so the substitution never contaminates
+the dynamics check; a partial-done test guards the subset-rebuild path.
 
 IMPORT-LIGHT: numpy + aiutopia.sim.* + the pure reward/spaces/_embeds leaves only --
 NEVER chromadb / py4j / torch / sentence_transformers.
@@ -84,7 +93,15 @@ class VecGathererSim:
             raise ValueError("num_envs must be >= 1")
         self.num_envs = int(num_envs)
         self.max_episode_ticks = int(max_episode_ticks)
-        self.worlds: list[SimWorld] = [SimWorld() for _ in range(self.num_envs)]
+        # BATCHED-ARRAY STATE (replaces a list of B scalar SimWorld objects).
+        # All hot-path reads/writes hit these contiguous arrays directly -- no
+        # per-step np.stack over python objects, no per-env list-comprehensions.
+        # Allocated lazily in reset() once n (logs-per-env) is known.
+        self.agent_pos = np.zeros((self.num_envs, 3), dtype=np.float64)
+        self.logs = np.zeros((self.num_envs, 0, 3), dtype=np.int64)
+        self.log_alive = np.zeros((self.num_envs, 0), dtype=bool)
+        self.oak = np.zeros(self.num_envs, dtype=np.int64)
+        self.tick = np.zeros(self.num_envs, dtype=np.int64)
         self.seeds = np.zeros(self.num_envs, dtype=np.int64)
         self._ep_return = np.zeros(self.num_envs, dtype=np.float64)
         self._ep_len = np.zeros(self.num_envs, dtype=np.int64)
@@ -92,10 +109,7 @@ class VecGathererSim:
         self.last_episode_length = np.full(self.num_envs, -1, dtype=np.int64)
 
     def _columns_batched(self):
-        logs = np.stack([w.logs for w in self.worlds]).astype(np.int64)
-        alive = np.stack([w.log_alive for w in self.worlds]).astype(bool)
-        pos = np.stack([w.agent_pos for w in self.worlds]).astype(np.float64)
-        return gatherer_nearest_columns_batched(logs, alive, pos)
+        return gatherer_nearest_columns_batched(self.logs, self.log_alive, self.agent_pos)
 
     def _build_obs(self) -> dict:
         B = self.num_envs
@@ -107,15 +121,14 @@ class VecGathererSim:
         grid6[..., 0] = grid
         g_resource_grid = grid6.reshape(B, _GRID_FLAT)
 
-        pos = np.stack([w.agent_pos for w in self.worlds]).astype(np.float32)
-        ticks = np.array([w.tick for w in self.worlds], dtype=np.int32)
+        pos = self.agent_pos.astype(np.float32)
+        ticks = self.tick.astype(np.int32)
 
         inv_ids = np.zeros((B, INV_SLOTS), dtype=np.int32)
         inv_counts = np.zeros((B, INV_SLOTS), dtype=np.int32)
         inv_ids[:, 0] = STONE_AXE_ID
         inv_counts[:, 0] = 1
-        oak = np.array([int(w.inventory.get("oak_log", 0)) for w in self.worlds], dtype=np.int64)
-        self._fill_oak_slots(inv_ids, inv_counts, oak)
+        self._fill_oak_slots(inv_ids, inv_counts, self.oak)
 
         mask = self._build_action_mask(inv_counts, nearest_dist)
 
@@ -151,20 +164,33 @@ class VecGathererSim:
 
     @staticmethod
     def _fill_oak_slots(inv_ids, inv_counts, oak) -> None:
-        """Pack oak_log counts into slots 1.. (64/slot), mirroring _inv_slots."""
-        for i in range(oak.shape[0]):
-            remaining = int(oak[i])
-            slot = 1
-            while remaining > 0 and slot < INV_SLOTS:
-                take = min(remaining, 64)
-                inv_ids[i, slot] = _OAK_LOG_ID
-                inv_counts[i, slot] = take
-                remaining -= take
-                slot += 1
+        """Pack oak_log counts into slots 1.. (64/slot), mirroring _inv_slots.
+
+        Vectorized over B: each env gets ``full = oak // 64`` slots of 64 plus one
+        remainder slot of ``oak % 64`` (if nonzero), capped at the INV_SLOTS-1 usable
+        slots. Byte-identical to the per-env fill loop (which stopped at slot
+        INV_SLOTS); the oak cap (256) keeps every count well within 5 slots.
+        """
+        usable = INV_SLOTS - 1  # slots 1..INV_SLOTS-1
+        oak64 = np.minimum(oak.astype(np.int64), usable * 64)  # cap to packable slots
+        full = (oak64 // 64).astype(np.int64)
+        rem = (oak64 % 64).astype(np.int64)
+        slot_idx = np.arange(1, INV_SLOTS)[None, :]  # (1, usable)
+        full_b = full[:, None]
+        is_full = slot_idx <= full_b  # slots [1..full] hold 64
+        is_rem = (slot_idx == (full_b + 1)) & (rem[:, None] > 0)  # next slot holds rem
+        occupied = is_full | is_rem
+        inv_ids[:, 1:][occupied] = _OAK_LOG_ID
+        counts = np.where(is_full, 64, 0) + np.where(is_rem, rem[:, None], 0)
+        inv_counts[:, 1:] = counts.astype(inv_counts.dtype)
 
     def _build_action_mask(self, inv_counts, nearest_dist) -> dict:
-        """Vectorized compute_gatherer_action_mask for the M1B arena facts."""
-        B = self.num_envs
+        """Vectorized compute_gatherer_action_mask for the M1B arena facts.
+
+        Sizes to the INPUT batch (inv_counts.shape[0]), not self.num_envs, so it
+        works for both the full-B step build and the done-subset autoreset build.
+        """
+        B = inv_counts.shape[0]
         skill = np.ones((B, N_GATHERER_SKILLS), dtype=np.int8)
         target = np.ones((B, N_GATHERER_SKILLS, N_TARGET_CLASSES_PER_ROLE), dtype=np.int8)
 
@@ -186,13 +212,38 @@ class VecGathererSim:
         }
 
     def reset(self, seeds) -> dict:
-        """Reset all envs to the given per-env seeds; return the batched obs dict."""
+        """Reset all envs to the given per-env seeds; return the batched obs dict.
+
+        Builds the byte-faithful _JavaRandom arena per env via SimWorld(seed).reset
+        ONCE, then copies the per-env layout into the contiguous batched-state arrays.
+        After this, step()/_build_obs() touch only the arrays -- never SimWorld again.
+        """
         seeds = np.asarray(seeds, dtype=np.int64).reshape(-1)
         if seeds.shape[0] != self.num_envs:
             raise ValueError(f"seeds length {seeds.shape[0]} != num_envs {self.num_envs}")
         self.seeds = seeds.copy()
-        for i, w in enumerate(self.worlds):
+
+        # Build per-env arenas once, then stack into batched arrays.
+        worlds = [SimWorld() for _ in range(self.num_envs)]
+        for i, w in enumerate(worlds):
             w.reset(int(seeds[i]), arena_mode="trees")
+        n = worlds[0].logs.shape[0]
+        # Uniform-n guard: batched logs (B,n,3) require equal n across envs. The
+        # gate path is trees-only (n=64 always); a future mixed/cluster mode with a
+        # different log count must fail loud here rather than stack ragged arrays.
+        for i, w in enumerate(worlds):
+            if w.logs.shape[0] != n:
+                raise ValueError(
+                    f"non-uniform logs-per-env: env {i} has {w.logs.shape[0]} != {n} "
+                    "(batched-array state requires equal n; only trees mode is supported)"
+                )
+
+        self.agent_pos = np.stack([w.agent_pos for w in worlds]).astype(np.float64)
+        self.logs = np.stack([w.logs for w in worlds]).astype(np.int64)
+        self.log_alive = np.stack([w.log_alive for w in worlds]).astype(bool)
+        self.oak = np.zeros(self.num_envs, dtype=np.int64)
+        self.tick = np.zeros(self.num_envs, dtype=np.int64)
+
         self._ep_return[:] = 0.0
         self._ep_len[:] = 0
         self.last_episode_return[:] = np.nan
@@ -216,40 +267,46 @@ class VecGathererSim:
         spatial = np.asarray(actions["spatial_param"], dtype=np.float64).reshape(B, 3)
         scalar = np.asarray(actions["scalar_param"], dtype=np.float64).reshape(B, -1)
 
-        prev_oak = np.array(
-            [int(w.inventory.get("oak_log", 0)) for w in self.worlds], dtype=np.int64
-        )
+        # Snapshot oak BEFORE the in-place skill mutation (Trap A: self.oak is
+        # mutated in place by vec_apply_skills, so prev_oak MUST be a copy or the
+        # reward delta is identically 0).
+        prev_oak = self.oak.copy()
 
         # 1. Advance world state via the VECTORIZED batched skill dynamics
         # (vec_skills.vec_apply_skills) -- byte-identical per-env to looping the
         # scalar apply_skill (locked by tests/unit/test_vec_skills.py +
         # test_vec_sim_parity.py), but HARVEST walk-chains and NAVIGATE walks run
-        # as numpy over B at once instead of B x 64 x ~75 python tick-steps.
+        # as numpy over B at once instead of B x 64 x ~75 python tick-steps. Now
+        # mutates the batched-state arrays in place (no SimWorld stack/scatter).
         # Returns the per-env clipped popcount (== bin(bitset).count("1")) directly.
-        n_clipped = vec_apply_skills(self.worlds, skill_type, target_class, spatial, scalar)
-        # 2. env-step counter (one tick per step; walk-ticks NOT counted).
-        for w in self.worlds:
-            w.tick += 1
-
-        curr_oak = np.array(
-            [int(w.inventory.get("oak_log", 0)) for w in self.worlds], dtype=np.int64
+        n_clipped = vec_apply_skills(
+            skill_type, target_class, spatial, scalar,
+            self.agent_pos, self.log_alive, self.logs, self.oak,
         )
+        # 2. env-step counter (one tick per step; walk-ticks NOT counted).
+        self.tick += 1
+
+        curr_oak = self.oak
 
         # 3. Reward (vectorized; proven == compute_reward_stage_1 gatherer).
         reward = self._gatherer_reward(prev_oak, curr_oak, n_clipped)
 
-        # 4. Obs (vectorized).
+        # 4. Obs (vectorized) -- built EXACTLY ONCE per step.
         obs = self._build_obs()
 
         # 5. Termination (goal) + truncation (tick budget OR OOB box).
+        # Trap B: the OOB box test must use the float32 position (agent_pos cast to
+        # float32 then back to float64) to match the scalar env's obs-position
+        # round-trip exactly. Reading raw float64 self.agent_pos here would be an
+        # untestable parity drift (the parity sequence never truncates), so we mirror
+        # obs["position"] (which is self.agent_pos.astype(float32)).
         terminated = curr_oak >= _GOAL_OAK
         pos = obs["position"]
         dx = np.abs(pos[:, 0].astype(np.float64) - _ARENA_CENTER_X)
         dz = np.abs(pos[:, 2].astype(np.float64) - _ARENA_CENTER_Z)
         y = pos[:, 1].astype(np.float64)
         oob = (dx > _ARENA_HALF) | (dz > _ARENA_HALF) | (y < _ARENA_FLOOR_Y)
-        ticks = np.array([w.tick for w in self.worlds], dtype=np.int64)
-        truncated = (ticks >= self.max_episode_ticks) | oob
+        truncated = (self.tick >= self.max_episode_ticks) | oob
 
         self._ep_return += reward
         self._ep_len += 1
@@ -281,16 +338,61 @@ class VecGathererSim:
         return r_primary + r_pbrs - TIME_PENALTY - r_clip
 
     def _autoreset(self, done, obs) -> None:
-        """Re-seed finished worlds and overwrite their obs rows with fresh resets."""
+        """Re-seed finished envs in place, then patch ONLY their obs rows.
+
+        Fix 3: the obs for non-done rows was already built once in step(); rebuilding
+        the full-B obs a second time (the old behavior) doubled obs-build cost on every
+        step that had ANY done env -- which is most steps in the converged regime. Here
+        we rebuild obs for the DONE SUBSET only (gatherer_nearest_columns_batched on the
+        re-seeded done slice) and scatter those rows in, so obs is effectively built
+        once for live rows + once for done rows, never twice for all B. The returned
+        obs row for a done env equals its fresh-reset obs (parity contract preserved).
+        """
         idx = np.nonzero(done)[0]
+        m = idx.shape[0]
+        if m == 0:
+            return
+
+        # Re-seed the done envs' state arrays from byte-faithful SimWorld arenas
+        # (same seed) -- the only place SimWorld is touched after reset().
         for i in idx:
-            self.worlds[int(i)].reset(int(self.seeds[int(i)]), arena_mode="trees")
-            self._ep_return[int(i)] = 0.0
-            self._ep_len[int(i)] = 0
-        fresh = self._build_obs()
-        for key, val in obs.items():
-            if key == "action_mask":
-                for mk in val:
-                    val[mk][done] = fresh["action_mask"][mk][done]
-            else:
-                val[done] = fresh[key][done]
+            ii = int(i)
+            w = SimWorld()
+            w.reset(int(self.seeds[ii]), arena_mode="trees")
+            self.agent_pos[ii] = w.agent_pos
+            self.logs[ii] = w.logs
+            self.log_alive[ii] = w.log_alive
+            self.oak[ii] = 0
+            self.tick[ii] = 0
+            self._ep_return[ii] = 0.0
+            self._ep_len[ii] = 0
+
+        # Subset obs: only the done rows, via the SAME batched primitives _build_obs
+        # uses (so the patched rows are byte-identical to a fresh reset's obs row).
+        sub_logs = self.logs[idx]
+        sub_alive = self.log_alive[idx]
+        sub_pos = self.agent_pos[idx]
+        grid, nearest8, nearest_dist, richness = gatherer_nearest_columns_batched(
+            sub_logs, sub_alive, sub_pos
+        )
+        grid6 = np.zeros((m, _W, _W, _GRID_CHANNELS), dtype=np.float32)
+        grid6[..., 0] = grid
+        g_resource_grid = grid6.reshape(m, _GRID_FLAT)
+
+        inv_ids = np.zeros((m, INV_SLOTS), dtype=np.int32)
+        inv_counts = np.zeros((m, INV_SLOTS), dtype=np.int32)
+        inv_ids[:, 0] = STONE_AXE_ID
+        inv_counts[:, 0] = 1
+        self._fill_oak_slots(inv_ids, inv_counts, self.oak[idx])  # oak==0 -> just the axe
+        mask = self._build_action_mask(inv_counts, nearest_dist)
+
+        # Scatter the freshly-reset rows into the already-built obs dict.
+        obs["position"][idx] = sub_pos.astype(np.float32)
+        obs["tick_in_episode"][idx, 0] = self.tick[idx].astype(np.int32)
+        obs["inv_slot_item_ids"][idx] = inv_ids
+        obs["inv_slot_counts"][idx] = inv_counts
+        obs["g_resource_grid"][idx] = g_resource_grid
+        obs["g_nearest_resources"][idx] = nearest8
+        obs["g_richness_score"][idx] = richness
+        for mk, mv in mask.items():
+            obs["action_mask"][mk][idx] = mv
