@@ -89,6 +89,9 @@ def main() -> None:
     parser.add_argument("--spawn-jitter", type=float, default=0.0,
                         help="(sim only) +/- blocks to jitter agent spawn each training "
                              "episode so some start HARVEST-masked, forcing NAVIGATE learning.")
+    parser.add_argument("--approach-shaping", action="store_true",
+                        help="(sim only) PBRS distance-reduction toward nearest log while "
+                             "HARVEST masked, so jittered masked spawns are solvable.")
     args = parser.parse_args()
 
     paths = Paths.from_env(); paths.ensure()
@@ -115,6 +118,7 @@ def main() -> None:
             decision_core=args.decision_core,
             natural_world=args.natural_world,
             spawn_jitter=args.spawn_jitter,
+            approach_shaping=args.approach_shaping,
         )
     else:
         # M2 multi-role MAPPO

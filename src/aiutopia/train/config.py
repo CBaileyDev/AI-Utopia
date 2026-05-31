@@ -273,6 +273,10 @@ def m1_gatherer_config(
     # policy must learn NAVIGATE->HARVEST (fixes the seed_1 HARVEST-press degeneracy;
     # see Research/SEED1_HOLE_DIAGNOSIS.md). 0 = unchanged. Eval never jitters.
     spawn_jitter: float = 0.0,
+    # approach_shaping (sim only): PBRS distance-reduction toward the nearest log
+    # while HARVEST is masked, so jitter-induced masked spawns become solvable
+    # (jitter alone made navigate an unsolvable sparse problem -> PPO suppressed it).
+    approach_shaping: bool = False,
 ) -> PPOConfig:
     """Section 7.1 M1 single-agent gatherer PPO config (new API stack).
 
@@ -309,6 +313,7 @@ def m1_gatherer_config(
             "randomize_layout": True,
             # Training-only agent-spawn jitter (0 = off). See m1_gatherer_config docstring.
             "spawn_jitter": spawn_jitter,
+            "approach_shaping": approach_shaping,
             **(
                 {
                     # M2: the POLICY drives instance-selection + blind-explore.

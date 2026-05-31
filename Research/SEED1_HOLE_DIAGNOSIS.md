@@ -75,6 +75,26 @@ purely that the policy learned to press HARVEST and SEARCH, never NAVIGATE — b
 randomized training layouts almost always gift a topmost-in-reach trunk at spawn, so the
 "masked → must navigate" state was effectively never in the training distribution.
 
+## Fix attempt 1 — spawn_jitter ALONE: VERIFIED NEGATIVE
+Added training-only `spawn_jitter=8` (agent start ±8b → ~23% of episodes spawn
+HARVEST-masked). Trained 200 iters (seed 2). Result: gate STILL 0.667, seed_1=0, and
+the seed_1 NAVIGATE logit got WORSE: −6.77 (now dead-last; greedy falls to WAIT).
+
+Why it failed: a masked spawn with random nav direction is an unsolvable sparse-reward
+problem (no reward until the agent both navigates the right way AND harvests). The 23%
+masked episodes yield ~zero return regardless of action, so PPO — dominated by the 77%
+easy HARVEST-press episodes — actively SUPPRESSES the NAVIGATE it keeps trying and failing.
+This empirically confirms config.py:327's "teach NAVIGATE needs a directional/shaping
+signal, not just exposure."
+
+## Fix attempt 2 — spawn_jitter + approach_shaping (RUNNING)
+Added `approach_shaping`: PBRS distance-reduction toward the nearest log applied ONLY while
+HARVEST is masked (telescopes to W·(dist_start−dist_end) over a masked run, zero once
+HARVEST unmasks, so the easy episodes are unbiased). This makes the jitter-induced masked
+states *solvable* (dense gradient toward the trunk) instead of a sparse dead end.
+Training seed 3, --spawn-jitter 8 --approach-shaping. Expect: NAVIGATE logit recovers,
+seed_1 collects 64, gate → 3/3.
+
 ## Status — DECISIVELY diagnosed (not a code bug; a training-distribution gap)
 Env, mask, and skill are all correct and sim↔real faithful. The fix is a training change,
 cleanly scoped and NON-confounded: ensure a meaningful fraction of training episodes spawn

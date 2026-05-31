@@ -190,6 +190,15 @@ class AiUtopiaSimEnv(ParallelEnv):
         # randomize_layout (training) path; fixed-seed eval/transfer never jitter, so the
         # gate scenarios and Java parity are untouched.
         self._spawn_jitter = float(config.get("spawn_jitter", 0.0))
+        # approach_shaping (sim-only, training): PBRS distance-reduction toward the
+        # nearest log applied ONLY while HARVEST is masked (nearest trunk's topmost log
+        # > reach). Telescopes to W*(dist_start - dist_end) over a masked run = pure
+        # "approached an unharvestable trunk" reward, zero once HARVEST unmasks. Fixes
+        # the verified failure where spawn_jitter alone made the masked state an
+        # unsolvable sparse-exploration problem and PPO SUPPRESSED navigate
+        # (NAVIGATE logit -> -6.77). Complements spawn_jitter (which creates the masked
+        # states); shaping makes them solvable. Off by default; eval never shapes.
+        self._approach_shaping = bool(config.get("approach_shaping", False))
         self._scout_mode = str(config.get("scout_mode", "oracle"))
         if self._scout_mode not in ("oracle", "real", "sweep", "off"):
             raise ValueError(
@@ -376,6 +385,22 @@ class AiUtopiaSimEnv(ParallelEnv):
                 if not _nearby_now:  # blind: nothing visible -> guide the explore
                     rew[agent] += phi - self._prev_phi.get(agent, phi)
                 self._prev_phi[agent] = phi
+
+            if self._approach_shaping:
+                # Reach-gated approach shaping: reward distance-reduction toward the
+                # nearest log ONLY while HARVEST is masked (trunk visible but its
+                # topmost log is just out of reach). Telescopes over the masked run
+                # and stops the instant HARVEST unmasks, so it never biases the easy
+                # in-reach episodes. Separate from the blind-only branch above.
+                phi_a = _log_potential(world)
+                _m = obs_curr.get("action_mask", {})
+                _sk = _m.get("skill_type") if isinstance(_m, dict) else None
+                harvest_masked = (
+                    _sk is not None and int(np.asarray(_sk).reshape(-1)[1]) == 0
+                )
+                if harvest_masked:
+                    rew[agent] += phi_a - self._prev_phi.get(agent, phi_a)
+                self._prev_phi[agent] = phi_a
 
             # 5. SUCCESS termination — same predicate the wrapper uses, over the
             # shared stub goal ({oak_log: 64}). _inventory_from_obs is the SAME
