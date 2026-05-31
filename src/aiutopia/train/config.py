@@ -77,6 +77,8 @@ def multi_agent_config(
             "active_roles": roles,
             "max_episode_ticks": max_episode_ticks,
             "randomize_layout": True,
+            # Backend marker so the eval-scenario runner builds the SIM env.
+            "backend": "sim",
         }
     else:
         register_aiutopia_env()
@@ -292,6 +294,10 @@ def m1_gatherer_config(
             "stage": 1,
             "active_roles": ["gatherer"],
             "max_episode_ticks": max_episode_ticks,
+            # Backend marker so the eval-scenario runner builds the SIM env to
+            # match training (otherwise it defaults to real-MC and a sim-trained
+            # policy is scored on the wrong world → success_rate 0.0).
+            "backend": "sim",
             # Vary the arena layout per training episode so the policy sees the
             # full layout distribution (not a single-layout overfit); eval/transfer
             # pass fixed seeds and never set this.

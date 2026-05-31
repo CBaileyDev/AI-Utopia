@@ -133,11 +133,21 @@ def run_scenario(scenario: Scenario, *, env_config: dict, rl_module, device: str
     import torch
     from ray.rllib.core import Columns
 
-    from aiutopia.env.wrapper import AiUtopiaPettingZooEnv
+    # Pick the eval env to MATCH the training backend. Previously this always
+    # built AiUtopiaPettingZooEnv (real Minecraft), so a sim-trained policy was
+    # evaluated on real-MC — and with no py4j_ports in a sim env_config it
+    # connected to the production server (no seeded arena) → success_rate 0.0
+    # despite the policy collecting ~63 logs in the sim it trained on. Dispatch
+    # on backend so the gate metric measures the policy in its own world.
+    eval_cfg = {**env_config, "tick_warp": True, "max_episode_ticks": scenario.max_ticks}
+    if env_config.get("backend") == "sim":
+        from aiutopia.sim.sim_env import AiUtopiaSimEnv
 
-    env = AiUtopiaPettingZooEnv(
-        {**env_config, "tick_warp": True, "max_episode_ticks": scenario.max_ticks}
-    )
+        env = AiUtopiaSimEnv(eval_cfg)
+    else:
+        from aiutopia.env.wrapper import AiUtopiaPettingZooEnv
+
+        env = AiUtopiaPettingZooEnv(eval_cfg)
     try:
         obs, _info = env.reset(seed=scenario.seed)
         # Seed `final_obs` from the reset obs so it is always bound even if
