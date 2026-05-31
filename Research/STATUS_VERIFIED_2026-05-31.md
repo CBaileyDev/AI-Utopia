@@ -46,6 +46,20 @@ Everything below was checked against running code, not docs.
   (The in-loop eval logged 0.0 because the scenario runner was hardwired to real-MC —
   fixed; see commit 697b4e3.)
 
+## seed_1 gate hole — fully diagnosed; fix is a curriculum problem (open)
+The failing gate seed was root-caused (Research/SEED1_HOLE_DIAGNOSIS.md): the policy
+learned a degenerate **HARVEST-press** strategy (NAVIGATE logit far below all others) and
+fails any spawn where no trunk is topmost-in-reach. Env/mask/skill are correct and
+sim↔real faithful. Two principled, non-confounded fixes were implemented and BOTH
+verified-negative:
+  1. `spawn_jitter` (expose masked spawns) → NAVIGATE got *worse* (−6.77): masked spawn
+     with random nav direction is unsolvable-sparse, PPO suppressed it.
+  2. `spawn_jitter + approach_shaping` (PBRS guidance) → still 0.667: HARVEST-press basin
+     locks in by iter 25, before the 23% masked episodes can shape navigation.
+Conclusion: closing seed_1 needs basin-escape (high/annealed masked fraction, entropy
+boost, or BC warm-start) — a multi-run experiment, deferred not guessed. The shipped
+`spawn_jitter`/`approach_shaping` knobs are correct and default-off (eval/parity untouched).
+
 ## Bugs found + fixed this session (all real, all verified)
 
 1. Eval scenario runner ignored backend → sim policy scored on empty production server
