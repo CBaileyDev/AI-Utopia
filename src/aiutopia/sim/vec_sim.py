@@ -40,8 +40,8 @@ from aiutopia.sim.obs_adapter import (
     REACH_RADIUS_BLOCKS,
     STONE_AXE_ID,
 )
-from aiutopia.sim.skills import apply_skill
 from aiutopia.sim.vec_obs import gatherer_nearest_columns_batched
+from aiutopia.sim.vec_skills import vec_apply_skills
 from aiutopia.sim.world import SimWorld
 
 __all__ = ["VecGathererSim"]
@@ -219,19 +219,16 @@ class VecGathererSim:
         prev_oak = np.array(
             [int(w.inventory.get("oak_log", 0)) for w in self.worlds], dtype=np.int64
         )
-        n_clipped = np.zeros(B, dtype=np.int64)
 
-        # 1. Advance world state via the SCALAR apply_skill (bit-identical dynamics).
-        for i, w in enumerate(self.worlds):
-            action = {
-                "skill_type": int(skill_type[i]),
-                "target_class": int(target_class[i]),
-                "spatial_param": spatial[i],
-                "scalar_param": scalar[i],
-            }
-            _, completion = apply_skill(w, action)
-            n_clipped[i] = bin(int(completion.get("clippedAxesBitset", 0))).count("1")
-            # 2. env-step counter (one tick per step; walk-ticks NOT counted).
+        # 1. Advance world state via the VECTORIZED batched skill dynamics
+        # (vec_skills.vec_apply_skills) -- byte-identical per-env to looping the
+        # scalar apply_skill (locked by tests/unit/test_vec_skills.py +
+        # test_vec_sim_parity.py), but HARVEST walk-chains and NAVIGATE walks run
+        # as numpy over B at once instead of B x 64 x ~75 python tick-steps.
+        # Returns the per-env clipped popcount (== bin(bitset).count("1")) directly.
+        n_clipped = vec_apply_skills(self.worlds, skill_type, target_class, spatial, scalar)
+        # 2. env-step counter (one tick per step; walk-ticks NOT counted).
+        for w in self.worlds:
             w.tick += 1
 
         curr_oak = np.array(

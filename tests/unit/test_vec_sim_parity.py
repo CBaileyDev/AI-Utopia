@@ -52,9 +52,18 @@ def _cap1_scalar() -> float:
     return 1.0 / 64.0  # round(1.0) == 1
 
 
+def _cap_scalar(cap: int) -> float:
+    """Scalar_param yielding cap = max(1, round(s*64)) == ``cap`` (cap logs/HARVEST)."""
+    return cap / 64.0  # round(cap) == cap for integer cap in [1, 64]
+
+
 def _action_sequence(T: int) -> list[dict]:
-    """A mixed, NON-terminating action plan (cap-1 HARVESTs + NAV/SEARCH/WAIT)."""
+    """A mixed, NON-terminating action plan (cap-1 HARVESTs + NAV/SEARCH/WAIT).
+
+    Extended: a cap-3 HARVEST chain + large NAVIGATEs; bag stays under 64.
+    """
     cap1 = _cap1_scalar()
+    cap3 = _cap_scalar(3)
     plan = [
         (1, [0.0, 0.0, 0.0], cap1),  # HARVEST one log
         (0, [0.3, 0.0, -0.2], 0.0),  # NAVIGATE
@@ -69,6 +78,16 @@ def _action_sequence(T: int) -> list[dict]:
         # so cap = max(1, round(0)) = 1: one log, no termination, no OOB walk.
         (1, [0.0, 0.0, 0.0], -0.5),
         (5, [0.0, 0.0, 0.0], 0.0),  # NOOP_BROADCAST (noop)
+        # cap-3 multi-log HARVEST CHAIN: three sequential greedy nearest-neighbor
+        # walks (agent moves to each harvested log; next nearest is from the NEW
+        # position) -- the path-dependent dynamics the vectorized chain loop must
+        # reproduce exactly.
+        (1, [0.0, 0.0, 0.0], cap3),  # HARVEST x3 (chain)
+        # LARGE-MOVE NAVIGATEs: big spatial steps (many closed-form walk-ticks)
+        # that land inside the arena box (no OOB truncation). The pair roughly
+        # cancels so the agent stays near the field for the next cycle's HARVESTs.
+        (0, [0.3, 0.0, 0.3], 0.0),  # NAVIGATE large (+x,+z)
+        (0, [-0.3, 0.0, -0.3], 0.0),  # NAVIGATE large (-x,-z)
     ]
     seq: list[dict] = []
     for t in range(T):
