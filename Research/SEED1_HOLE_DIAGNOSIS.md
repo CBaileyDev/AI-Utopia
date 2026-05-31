@@ -87,13 +87,31 @@ easy HARVEST-press episodes — actively SUPPRESSES the NAVIGATE it keeps trying
 This empirically confirms config.py:327's "teach NAVIGATE needs a directional/shaping
 signal, not just exposure."
 
-## Fix attempt 2 — spawn_jitter + approach_shaping (RUNNING)
-Added `approach_shaping`: PBRS distance-reduction toward the nearest log applied ONLY while
-HARVEST is masked (telescopes to W·(dist_start−dist_end) over a masked run, zero once
-HARVEST unmasks, so the easy episodes are unbiased). This makes the jitter-induced masked
-states *solvable* (dense gradient toward the trunk) instead of a sparse dead end.
-Training seed 3, --spawn-jitter 8 --approach-shaping. Expect: NAVIGATE logit recovers,
-seed_1 collects 64, gate → 3/3.
+## Fix attempt 2 — spawn_jitter + approach_shaping: VERIFIED NEGATIVE
+Added `approach_shaping` (PBRS distance-reduction toward nearest log, gated on HARVEST
+masked; telescopes, easy episodes unbiased). Trained 200 iters (seed 3,
+--spawn-jitter 8 --approach-shaping). Result: gate STILL 0.667, seed_1=0, NAVIGATE logit
+−5.73 (still dead-last).
+
+Why it failed too: return hits 124 by **iter 25** — the HARVEST-press basin locks in
+almost immediately. Shaping only pays out in the ~23% masked episodes, and only once the
+policy emits a *correct* NAVIGATE direction to actually reduce distance — which a
+fast-collapsing greedy policy never explores. The dominant 77% easy-episode gradient
+(HARVEST→+reward) buries the rare shaping signal. Classic exploration-bootstrap trap.
+
+## Conclusion: seed_1 is an exploration/curriculum problem, not a one-knob fix
+Two principled, non-confounded interventions (exposure via jitter; dense guidance via
+PBRS) both failed because the policy commits to HARVEST-press in the first ~25 iters,
+before the rare hard states can shape it. Closing seed_1 needs an intervention that
+prevents/breaks the basin, e.g.:
+  - **High masked fraction** (jitter so ≥50–100% of early episodes start masked) so
+    navigate is the dominant thing to learn, not a 23% minority — likely annealed
+    (curriculum: start mostly-masked, relax over training).
+  - **Entropy boost** (raise entropy_coeff or KL slack) so NAVIGATE keeps getting
+    explored instead of being squeezed out by iter 25.
+  - **Behavior cloning / scripted-navigate warm-start** to seed a non-degenerate prior.
+These are real experiments (multiple runs / hyperparameter search), not a single setting.
+Deferred rather than burned on guesses.
 
 ## Status — DECISIVELY diagnosed (not a code bug; a training-distribution gap)
 Env, mask, and skill are all correct and sim↔real faithful. The fix is a training change,
