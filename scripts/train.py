@@ -92,6 +92,8 @@ def main() -> None:
     parser.add_argument("--approach-shaping", action="store_true",
                         help="(sim only) PBRS distance-reduction toward nearest log while "
                              "HARVEST masked, so jittered masked spawns are solvable.")
+    parser.add_argument("--entropy-coeff", type=float, default=0.01,
+                        help="(sim only) PPO entropy_coeff; raise to keep NAVIGATE explored.")
     args = parser.parse_args()
 
     paths = Paths.from_env(); paths.ensure()
@@ -119,6 +121,7 @@ def main() -> None:
             natural_world=args.natural_world,
             spawn_jitter=args.spawn_jitter,
             approach_shaping=args.approach_shaping,
+            entropy_coeff=args.entropy_coeff,
         )
     else:
         # M2 multi-role MAPPO

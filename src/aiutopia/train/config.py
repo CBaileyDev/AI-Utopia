@@ -277,6 +277,9 @@ def m1_gatherer_config(
     # while HARVEST is masked, so jitter-induced masked spawns become solvable
     # (jitter alone made navigate an unsolvable sparse problem -> PPO suppressed it).
     approach_shaping: bool = False,
+    # entropy_coeff override (sim only): raise above 0.01 to keep NAVIGATE exploration
+    # alive past the ~iter-25 HARVEST-press basin lock-in (seed_1 work).
+    entropy_coeff: float = 0.01,
 ) -> PPOConfig:
     """Section 7.1 M1 single-agent gatherer PPO config (new API stack).
 
@@ -398,7 +401,7 @@ def m1_gatherer_config(
             lambda_=0.95,
             clip_param=0.2,
             vf_clip_param=10.0,
-            entropy_coeff=0.01,
+            entropy_coeff=entropy_coeff,
             kl_coeff=0.2,
             grad_clip=1.0,
             # NO legacy model={"use_lstm": True} block — the custom RLModule
