@@ -158,6 +158,11 @@ class AiUtopiaSimEnv(ParallelEnv):
         # guides the decision-core policy's blind-explore. Off by default.
         self._distance_shaping = bool(config.get("distance_shaping", False))
         self._prev_phi: dict[str, float] = {}
+        # Separate prev-potential store for approach_shaping so it is NEVER clobbered
+        # by the distance_shaping branch (both branches run in the same step; the
+        # distance write would otherwise zero the approach term — see
+        # test_approach_shaping_prev_phi).
+        self._prev_phi_approach: dict[str, float] = {}
         # M2 resource-bearing cue (Explorer-report sim): feed a direction-to-nearest
         # -resource into g_hostiles_nearby[0] so the policy can explore the RIGHT way
         # (closes the blind-explore-direction gap). Sim-only experiment.
@@ -292,6 +297,7 @@ class AiUtopiaSimEnv(ParallelEnv):
                 self._scouts[agent] = SweepScout()
             obs[agent] = self._build_obs(agent, world)
             self._prev_phi[agent] = _log_potential(world)
+            self._prev_phi_approach[agent] = _log_potential(world)
         self._prev_obs = obs
         infos = {a: {} for a in self.agents}
         return obs, infos
@@ -399,8 +405,8 @@ class AiUtopiaSimEnv(ParallelEnv):
                     _sk is not None and int(np.asarray(_sk).reshape(-1)[1]) == 0
                 )
                 if harvest_masked:
-                    rew[agent] += phi_a - self._prev_phi.get(agent, phi_a)
-                self._prev_phi[agent] = phi_a
+                    rew[agent] += phi_a - self._prev_phi_approach.get(agent, phi_a)
+                self._prev_phi_approach[agent] = phi_a
 
             # 5. SUCCESS termination — same predicate the wrapper uses, over the
             # shared stub goal ({oak_log: 64}). _inventory_from_obs is the SAME

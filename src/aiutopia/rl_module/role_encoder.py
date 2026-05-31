@@ -59,10 +59,14 @@ class ExplorerRoleEncoder(nn.Module):
         # Explorer obs: position, richness_score, g_nearest_resources (8 logs with 6-d vectors)
         # Total: 1 + 8*6 = 49 dims
         flat_in = 1 + 8 * 6  # 49
+        # Output 128-d (NOT 64): explorer has no grid_conv branch, so this MLP alone
+        # supplies the full role-feature width SharedBackbone expects -- fused =
+        # core(256) + role(128) + pixel(64) = 448 = FUSED_INPUT_DIM. A 64-d output
+        # fuses to 384 and raises a mat1/mat2 RuntimeError on the first forward.
         self.flat_mlp = nn.Sequential(
             nn.Linear(flat_in, 128),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Linear(128, 128),
             nn.ReLU(),
         )
 
