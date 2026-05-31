@@ -56,11 +56,15 @@ def main() -> None:
     log.info(f"Py4J port: {args.port}")
     log.info(f"Max steps per agent: {args.max_steps}")
 
-    # Create env config
+    # Create env config. NOTE: wrapper expects `py4j_ports` (list) + `active_roles`;
+    # the old `py4j_port` (singular) key was silently ignored (connected to default 25100).
     env_config = {
+        "active_roles": roles,
+        "stage": 1,
         "peaceful": True,  # No hostile mobs
-        "py4j_port": args.port,
+        "py4j_ports": [args.port],
         "seed": args.seed,
+        "enable_memory_writes": False,
     }
 
     try:

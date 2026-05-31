@@ -16,6 +16,20 @@ from pathlib import Path
 
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
+OAK_LOG_ITEM_ID = 132  # from aiutopia.env.reward._ITEM_ID_TO_NAME
+
+
+def _inv_count(obs: dict, item_id: int) -> int:
+    """Sum inventory counts for slots holding item_id.
+
+    Honest fix: prior code read obs['oak_log'] which is ABSENT from the obs dict —
+    so it always returned the hardcoded default 0. Oak logs live in
+    inv_slot_item_ids / inv_slot_counts (parallel arrays).
+    """
+    ids = obs.get("inv_slot_item_ids", []) or []
+    counts = obs.get("inv_slot_counts", []) or []
+    return int(sum(int(c) for i, c in zip(ids, counts) if int(i) == item_id))
+
 
 def main() -> None:
     """Phase 3: persistent survival world test."""
@@ -93,7 +107,7 @@ def main() -> None:
             # Track metrics
             health = float(obs.get("health", [20.0])[0]) if obs.get("health") is not None else 20.0
             hunger = float(obs.get("hunger", [20.0])[0]) if obs.get("hunger") is not None else 20.0
-            oak_log = int(obs.get("oak_log", [0])[0]) if obs.get("oak_log") is not None else 0
+            oak_log = _inv_count(obs, OAK_LOG_ITEM_ID)
             time_of_day = int(obs.get("time_of_day", [0])[0]) if obs.get("time_of_day") is not None else 0
             position = obs.get("position", [0, 0, 0])
 
