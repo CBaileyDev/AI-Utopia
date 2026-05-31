@@ -1,39 +1,60 @@
-# seed_1 Gate Hole — Root Cause: HARVEST-spam crutch
+# seed_1 Gate Hole — Verified Root Cause (parity-checked)
 
 ## Symptom
 Converged sim gatherer (return 127, iter 200) scores gate 2/3:
 seed_2=64, seed_3=64, **seed_1=0**. Persistent across checkpoints, not noise.
 
 ## Trace (greedy policy, per-step skill + oak)
-- seed_2: **1 step**, skill=HARVEST(1) → oak=64, terminates. Sim HARVEST grabs ALL
-  reachable logs in one env-step.
-- seed_1: **120+ steps**, skill=SEARCH(3) EVERY step, never HARVEST, oak=0.
+- seed_2: **1 step**, skill=HARVEST(1) → oak=64, terminates. (Sim HARVEST collects all
+  reachable logs in one env-step.)
+- seed_1: **120+ steps**, skill=SEARCH(3) every step, never HARVEST/NAVIGATE, oak=0.
 
-## Root cause (verified)
-Initial skill masks at spawn:
-- seed_1: `[1,0,0,1,1,1]` → **HARVEST (idx1) MASKED** (no log in perception reach)
-- seed_2: `[1,1,0,1,1,1]` → HARVEST valid (a log spawned within reach)
+## Root cause — VERIFIED, and it is NOT a sim bug
 
-The policy learned a **HARVEST-spam strategy**: if a log is in immediate reach, HARVEST
-one-shots all 64. It NEVER learned NAVIGATE(0)→HARVEST. When seed_1 spawns with no log
-in reach, HARVEST is masked, and the greedy policy falls back to SEARCH(3) in place
-forever — it never navigates to the 16 logs that exist elsewhere in the arena.
+HARVEST is mask-gated on `nearest_res_dist <= REACH_RADIUS_BLOCKS (4.5)`
+(obs_adapter.py:235). `nearest_res_dist` is the distance to the **topmost log per
+(dx,dz) column** within a ±3 dy window (gatherer_nearest_columns, obs_adapter.py:97-142).
 
-The sim source even names this: `sim_env.py` comments reference "the old HARVEST-spam
-path" and "preserves the proven HARVEST-spam M1B/survival path" (harvest_perception_mask
-defaults off → HARVEST always valid → spam works).
+seed_1 spawn at (64.5, 65, -47.5). Nearest trunk is the column at block-delta (dx=3, dz=2)
+— a vertical stack of logs at dy=0,1,2,3 (y=65→68):
+- BOTTOM log dy=0: dist = √(9+0+4) = **3.61b** → physically within 4.5b reach.
+- TOPMOST log dy=3: dist = √(9+9+4) = **4.69b** → the column distance the mask uses.
 
-## Implication
-- The 127-return "convergence" is largely a sim artifact: a too-generous HARVEST (64 in
-  one step) + logs often pre-placed in reach. It is NOT genuine gather behavior.
-- Gate 0.667 is real but the failing seed fails *completely* (0), exposing the crutch.
-- This matches the fast-sim memory's "real HARVEST non-determinism" fidelity flag.
+So the mask sees 4.69 > 4.5 → **HARVEST masked**, even though the trunk's base is reachable
+at 3.61b. seed_2/3 differ only by geometry: their nearest trunk's *topmost* log still lands
+≤4.5b (3.16b), so HARVEST stays valid and the one-shot collect fires.
 
-## Fix experiment (running)
-Train with `harvest_perception_mask=True`: HARVEST is gated on actually perceiving a
-reachable log, so the policy MUST learn NAVIGATE→HARVEST instead of spamming. Hypothesis:
-perception-masked training yields a policy that generalizes across all 3 seeds (no free
-in-reach win), even if peak return is lower / convergence slower.
+**Parity check (important):** the Java `GathererOverlayBuilder` does the SAME thing —
+`for (dy=3; dy>=-3; dy--) … break  // only the topmost LOG per (dx,dz)` then
+`nearestResDist = sqrt(nearby.get(0).distSq())` (GathererOverlayBuilder.java:65,79,146).
+The sim faithfully reproduces real. **This is the real system's actual behavior, not a
+sim artifact.** "Fixing" gatherer_nearest_columns to use the nearest (bottom) log instead
+of the topmost would BREAK sim↔real parity unless the Java side is changed in lockstep.
 
-Success = gate 3/3 (or much closer) with non-degenerate skill usage (NAVIGATE present,
-not SEARCH-only). Failure = still can't navigate → deeper reward/curriculum work needed.
+## What the policy actually learned (the real limitation)
+A degenerate **HARVEST-when-topmost-in-reach** strategy. When a trunk's top is ≤4.5b it
+one-shots 64; when the trunk is 1 block farther (top >4.5b but base reachable) it should
+NAVIGATE one step closer to unmask HARVEST — but it never learned that, it picks SEARCH
+forever. The trunk sits at 3.6b, well inside the 16b perception window, so navigation IS
+learnable on the current obs (this is NOT the "blind beyond 16b" limitation cited in
+config.py:327). The policy simply took the shortcut because randomized training layouts
+usually gift a topmost-in-reach trunk at spawn.
+
+## Why this matters
+- The "127 convergence" overstates competence: it is HARVEST-spam on a too-generous sim
+  HARVEST (64-in-one-step) plus usually-in-reach spawns. Real gather competence (approach
+  a trunk, then harvest) was never learned.
+- seed_1=0 is a LEGITIMATE gate failure, correctly measured. Gate 0.667 stands.
+
+## Fix direction (a training experiment, not a code fix)
+Remove the in-reach shortcut during training so the policy must learn NAVIGATE→HARVEST:
+either a curriculum/arena that never spawns a topmost-in-reach trunk, or reduce the
+HARVEST one-shot generosity so a single HARVEST ≠ instant 64. Do NOT use `decision_core`
+as the fix — it changes the obs (bearing cue), the arena (clusters, half=34), adds
+distance shaping, and per config.py:144 demotes HARVEST to mine cobblestone, which is
+incoherent with the oak_log gate predicate. Keep the task fixed; remove only the shortcut.
+
+## Status
+Diagnosis complete + parity-verified. The fix is a non-trivial training run (next
+session): retrain with the shortcut removed, then re-eval all 3 gate seeds expecting
+non-degenerate skill usage (NAVIGATE present) and 3/3.
