@@ -84,6 +84,47 @@ def build_module(device):
     return spec["gatherer_policy"].to(device)
 
 
+def split_actor_critic_params(mod):
+    """Partition named params: (actor, critic). Critic = ``ctde_critic.*`` only (raw-obs value path, freeze is clean)."""  # noqa: E501
+    actor, critic = [], []
+    for name, p in mod.named_parameters():
+        (critic if name.startswith("ctde_critic") else actor).append(p)
+    return actor, critic
+
+
+def build_optimizer(actor_params, critic_params, *, actor_lr, value_lr):
+    """Adam with two param-groups: [0]=actor (ramped lr), [1]=critic (value_lr)."""
+    return torch.optim.Adam(
+        [
+            {"params": actor_params, "lr": actor_lr},
+            {"params": critic_params, "lr": value_lr},
+        ]
+    )
+
+
+def actor_lr_for_iter(it, *, warmup, ramp, full_lr):
+    """Return (actor_lr, phase) for iter ``it``. Phase in warmup|ramp|finetune."""
+    if it < warmup:
+        return 0.0, "warmup"
+    if ramp > 0 and it < warmup + ramp:
+        step = (it - warmup) + 1  # 1..ramp -> lr full_lr*1/ramp .. full_lr
+        return full_lr * (step / ramp), "ramp"
+    return full_lr, "finetune"
+
+
+def warmup_step(mod, opt, obs, s_h, s_c, returns, *, vf_coeff, grad_clip):
+    """One VALUE-ONLY update; returns the value loss. No pg/ent/kl term."""
+    out = mod._forward_train({Columns.OBS: obs, Columns.STATE_IN: {"h": s_h, "c": s_c}})
+    vf = out[Columns.VF_PREDS]
+    v_loss = 0.5 * (vf - returns).pow(2).mean()
+    loss = vf_coeff * v_loss
+    opt.zero_grad()
+    loss.backward()
+    nn.utils.clip_grad_norm_(mod.parameters(), grad_clip)
+    opt.step()
+    return float(v_loss.detach())
+
+
 def obs_to_tensors(obs, device):
     out = {}
     for k, v in obs.items():
@@ -249,6 +290,36 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         help="path to a state_dict to load BEFORE training (e.g. a BC warm-start). "
         "Combine with --iters 0 --gate-check to evaluate a checkpoint with no training.",
     )
+    # --- BC consolidation: value warm-up + actor-freeze, then gentle LR ramp ---
+    ap.add_argument(
+        "--value-warmup-iters",
+        type=int,
+        default=0,
+        help="first N iters train ONLY the value/critic; the actor is FROZEN "
+        "(value-only loss + actor param-group lr=0) so a BC-cloned policy is byte-"
+        "stable while the random critic learns to predict returns under it. Rollouts "
+        "+ GAE are still real under the frozen policy. 0 = off.",
+    )
+    ap.add_argument(
+        "--actor-lr",
+        type=float,
+        default=-1.0,
+        help="actor (policy) LR for the finetune phase. <0 (default) = use --lr.",
+    )
+    ap.add_argument(
+        "--value-lr",
+        type=float,
+        default=-1.0,
+        help="critic (value) LR, CONSTANT through warm-up AND finetune. <0 = use --lr. "
+        "Set higher than --actor-lr to converge the critic during warm-up.",
+    )
+    ap.add_argument(
+        "--actor-lr-ramp",
+        type=int,
+        default=0,
+        help="after warm-up, ramp the actor LR linearly from 0 to actor-lr over R "
+        "iters so consolidation does not jolt the cloned policy. 0 = no ramp.",
+    )
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -265,7 +336,26 @@ def main() -> None:  # noqa: PLR0912, PLR0915
             f"(missing={len(missing)} unexpected={len(unexpected)})",
             flush=True,
         )
-    opt = torch.optim.Adam(mod.parameters(), lr=args.lr)
+    # Two param-groups (actor / critic) so the actor can be frozen (lr=0) during
+    # the value warm-up and ramped afterward while the critic trains throughout at
+    # --value-lr. group[0]=actor, group[1]=critic (see build_optimizer).
+    actor_params, critic_params = split_actor_critic_params(mod)
+    full_actor_lr = args.actor_lr if args.actor_lr >= 0.0 else args.lr
+    value_lr = args.value_lr if args.value_lr >= 0.0 else args.lr
+    warmup_iters = max(0, args.value_warmup_iters)
+    ramp_iters = max(0, args.actor_lr_ramp)
+    # During warm-up the actor group starts at lr=0 (belt-and-suspenders alongside
+    # the value-only loss). actor_lr_for_iter is the single source of truth.
+    init_actor_lr, _ = actor_lr_for_iter(
+        0, warmup=warmup_iters, ramp=ramp_iters, full_lr=full_actor_lr
+    )
+    opt = build_optimizer(actor_params, critic_params, actor_lr=init_actor_lr, value_lr=value_lr)
+    print(
+        f"optimizer: actor params={len(actor_params)} critic params={len(critic_params)} "
+        f"| value_warmup_iters={warmup_iters} actor_lr_ramp={ramp_iters} "
+        f"full_actor_lr={full_actor_lr:g} value_lr={value_lr:g}",
+        flush=True,
+    )
 
     # TRAINING-only curriculum (parity-gated in VecGathererSim; default off). Any
     # curriculum flag implies randomize_layout (the scalar env gates all three on
@@ -286,7 +376,6 @@ def main() -> None:  # noqa: PLR0912, PLR0915
     # iters when --target-kl>0 (RLlib-style adaptive). Defaults (0/0) reproduce the
     # prior clip-only loss bit-for-bit (the kl term is multiplied by 0).
     kl_coeff = float(args.kl_coeff)
-    base_lr = float(args.lr)
 
     init_state = mod.get_initial_state()
     hdim = init_state["h"].shape[0]
@@ -305,15 +394,24 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         # Per-iter schedules (all OFF by default -> constant, prior behavior).
         frac = it / max(1, args.iters - 1)  # 0..1 across the run
         ent_coeff = args.ent_coeff * (1.0 - frac) if args.anneal_ent else args.ent_coeff
-        if args.lr_anneal == "linear":
-            cur_lr = base_lr * (1.0 - frac)
-        elif args.lr_anneal == "cosine":
-            cur_lr = base_lr * 0.5 * (1.0 + np.cos(np.pi * frac))
-        else:
-            cur_lr = base_lr
-        if args.lr_anneal != "off":
-            for pg in opt.param_groups:
-                pg["lr"] = cur_lr
+
+        # --- BC-consolidation phase + per-group LR (single source of truth) ---
+        # actor LR: 0 during warm-up, ramped over --actor-lr-ramp, then full.
+        actor_lr, phase = actor_lr_for_iter(
+            it, warmup=warmup_iters, ramp=ramp_iters, full_lr=full_actor_lr
+        )
+        # --lr-anneal (if on) decays the FULL actor LR, applied only once the actor
+        # is unfrozen (warm-up/ramp untouched so the freeze + ramp stay clean).
+        if phase == "finetune" and args.lr_anneal != "off":
+            denom = max(1, args.iters - 1 - (warmup_iters + ramp_iters))
+            ft_frac = min(1.0, max(0.0, (it - (warmup_iters + ramp_iters)) / denom))
+            if args.lr_anneal == "linear":
+                actor_lr = full_actor_lr * (1.0 - ft_frac)
+            else:  # cosine
+                actor_lr = full_actor_lr * 0.5 * (1.0 + np.cos(np.pi * ft_frac))
+        opt.param_groups[0]["lr"] = actor_lr  # actor group
+        opt.param_groups[1]["lr"] = value_lr  # critic group (constant)
+        is_warmup = phase == "warmup"
         buf_obs = []
         buf_act = []
         buf_logp = torch.zeros(T, B, device=device)
@@ -407,7 +505,7 @@ def main() -> None:  # noqa: PLR0912, PLR0915
 
         t_update0 = time.perf_counter()
         env_idx = np.arange(B)
-        kls, clipfracs, ents = [], [], []
+        kls, clipfracs, ents, v_losses = [], [], [], []
         # First-minibatch probe: on the very first minibatch of the first epoch
         # the policy params are UNCHANGED from collection, so for a correct,
         # self-consistent replay approx_kl and clipfrac must be ~0. A materially
@@ -435,6 +533,29 @@ def main() -> None:  # noqa: PLR0912, PLR0915
 
                 s_h = buf_h0[0][mb_t]
                 s_c = buf_c0[0][mb_t]
+
+                if is_warmup:
+                    # VALUE-ONLY warm-up: train ONLY the critic on this minibatch.
+                    # mb_ret here uses GAE returns computed under the FROZEN policy
+                    # (real targets). The pg/ent/kl terms are dropped entirely, so
+                    # the actor sees zero gradient (hence zero Adam momentum) and
+                    # the cloned policy is byte-stable. warmup_step also calls
+                    # _forward_train, so the value path / LSTM threading matches the
+                    # finetune path exactly.
+                    mb_ret = returns[:, mb].T
+                    vl = warmup_step(
+                        mod,
+                        opt,
+                        mb_obs,
+                        s_h,
+                        s_c,
+                        mb_ret,
+                        vf_coeff=args.vf_coeff,
+                        grad_clip=args.grad_clip,
+                    )
+                    v_losses.append(vl)
+                    continue
+
                 out = mod._forward_train(
                     {Columns.OBS: mb_obs, Columns.STATE_IN: {"h": s_h, "c": s_c}}
                 )
@@ -493,6 +614,7 @@ def main() -> None:  # noqa: PLR0912, PLR0915
                 kls.append(float(approx_kl))
                 clipfracs.append(float(clipfrac))
                 ents.append(float(ent_loss))
+                v_losses.append(float(v_loss.detach()))
 
         update_time = time.perf_counter() - t_update0
         iter_time = time.perf_counter() - t_iter0
@@ -513,9 +635,12 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         sps_hist.append(sps)
         collect_hist.append(collect_time)
         update_hist.append(update_time)
-        ent_m = float(np.mean(ents))
-        kl_m = float(np.mean(kls))
-        cf_m = float(np.mean(clipfracs))
+        # During warm-up the pg/ent/kl lists are empty (value-only step); guard the
+        # means so a warm-up iter logs nan for those instead of a RuntimeWarning.
+        ent_m = float(np.mean(ents)) if ents else float("nan")
+        kl_m = float(np.mean(kls)) if kls else float("nan")
+        cf_m = float(np.mean(clipfracs)) if clipfracs else float("nan")
+        vloss_m = float(np.mean(v_losses)) if v_losses else float("nan")
         kl_coeff_logged = kl_coeff
         # ADAPTIVE KL (RLlib-style): nudge kl_coeff toward holding the iter-mean KL
         # near --target-kl. Only active when target_kl>0; finite-KL guard so a NaN
@@ -526,10 +651,11 @@ def main() -> None:  # noqa: PLR0912, PLR0915
             elif kl_m < 0.5 * args.target_kl:
                 kl_coeff /= 1.5
         print(
-            f"iter {it:3d} | sps {sps:7.0f} | "
+            f"iter {it:3d} | {phase:8s} alr {actor_lr:.2e} | sps {sps:7.0f} | "
             f"collect {collect_time:5.2f}s update {update_time:5.2f}s | "
             f"ep_ret {ep_ret_mean:7.2f} (n={n_ep}) | "
             f"term_mean {term_mean:7.2f} (n_term={n_term}) term_rate {term_rate:.3f} | "
+            f"v_loss {vloss_m:8.3f} | "
             f"ent {ent_m:.3f} KL {kl_m:.4f} clipfrac {cf_m:.3f} kl_coeff {kl_coeff_logged:.4f} | "
             f"first_mb[KL {first_mb_kl:.5f} clipfrac {first_mb_clipfrac:.4f}] | "
             f"seq_cross {cross_frac:.2f}",

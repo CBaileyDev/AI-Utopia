@@ -36,3 +36,27 @@ determinism->promote) + a real-MC transfer check.
 | A | force_masked+approach+kl0.2 | 80 | 0/3 | 0 | -1.58 (r6) | DEGRADED s2/3 to 33; shaping nets ~0 (cant reward unmade approach); 80it too short for 100%-hard |
 | A2 | force_masked+approach long | 300 | 2/3 | 0 | -17.5 (r6) | force_masked CONFIRMED NEGATIVE — longer drove NAV deeper; recovered s2/3 |
 | BC | demonstrator->clone navigate-then-harvest | 60 (bc) | 3/3 | 64 | +2.49 (r2) | BREAKTHROUGH: sim gate 3/3, NAV off floor, traj [NAV,HARV]. NEEDS: ppo-finetune durability + real-MC transfer |
+| B | ppo-finetune-from-BC, jitter8 kl0.3 lr1e-4 | 60 | 1/3 | 32 | +4.32 (r2) | PPO ERODED BC chain (s1 64->32, s3 64->28, term_rate 0.57->0.24); NAV survived but seq degraded. Needs value-warmup. BC-alone = clean 3/3 |
+
+## BREAKTHROUGH (seed_1 cracked) + the two real findings
+- **BC transfers to REAL-MC**: bc_gatherer.pt on real instance 25001 -> seed_1 oak=60 (was 0
+  pre-BC!), seed_2=46, seed_3=46. Navigate-then-harvest GENUINELY works on real Minecraft
+  (masked seed_1 even beat the others). Shortfall from 64 = the KNOWN real-HARVEST-chain
+  fidelity gap (N21), not a navigate failure. (success_rate 0/3 only because real chain
+  doesn't clear all 64; the seed_1 NAVIGATE behavior transferred.)
+- **PPO-from-BC consolidation root cause = T=32 LSTM cross-boundary update-ratio bias**
+  (NOT the random critic; value-warmup didn't help). Sharp BC clone -> first_mb KL 0.50 at
+  T=32 corrupts the update. PROOF: T=1 (horizon 1, no cross-boundary) HOLDS gate 3/3 from
+  BC (all 64, seed_1=64, NAV +2.13). So PPO CAN consolidate BC; fix = re-segmented LSTM
+  update-replay (replay each segment from a zero LSTM start-state). General win (the bias
+  affects all recurrent fast_train updates, not just BC).
+
+## Status: seed_1 BASIN CRACKED (the 3-attempt PPO failure)
+- BC: sim gate 3/3 + NAV off floor + real-MC seed_1 0->60. 
+- Consolidation: works at T=1; full-T needs the re-segmented update (next).
+- Verified per advisor bar: per-seed oak, NAV present, AND real-MC transfer (partial — the
+  navigate transfers; full-64 is the separate harvest-chain fidelity gap).
+
+| C | value-warmup+consolidate T=32 | 80 | 0/3 | 32 | n/a | warmup clean but T=32 LSTM-ratio-bias erodes; T=1 control HOLDS 3/3 (root cause found) |
+| C-T1 | BC->PPO consolidate T=1 | 10 | 3/3 | 64 | +2.13 | PPO CONSOLIDATES BC at T=1 (no cross-boundary bias) |
+| BC-real | bc on real-MC 25001 | - | 0/3 | 60 | - | navigate TRANSFERS (s1 0->60); shortfall=real harvest-chain gap |
