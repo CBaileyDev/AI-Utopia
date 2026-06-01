@@ -60,3 +60,22 @@ determinism->promote) + a real-MC transfer check.
 | C | value-warmup+consolidate T=32 | 80 | 0/3 | 32 | n/a | warmup clean but T=32 LSTM-ratio-bias erodes; T=1 control HOLDS 3/3 (root cause found) |
 | C-T1 | BC->PPO consolidate T=1 | 10 | 3/3 | 64 | +2.13 | PPO CONSOLIDATES BC at T=1 (no cross-boundary bias) |
 | BC-real | bc on real-MC 25001 | - | 0/3 | 60 | - | navigate TRANSFERS (s1 0->60); shortfall=real harvest-chain gap |
+
+## CRUX FIX + deployable consolidated gatherer
+- LSTM update-ratio bias FIXED (faithful TBPTT-1: feed stored per-timestep collection
+  states as STATE_IN). first_mb KL 0.71 -> 0.00000 at T=32, held all 100 iters.
+  Replay-invariant test added. GENERAL fix (all recurrent fast_train updates).
+- RUN D: BC -> PPO consolidate at full T=32 (--actor-lr-ramp 15 to avoid the unfreeze jolt)
+  -> gate 3/3 (seed_1=64/seed_2=64/seed_3=64). weights/runD_consolidated.pt. term_rate
+  dips then recovers to 0.77 (not the old monotonic collapse). sps ~7k unchanged. 268 green.
+- Caveats: 3/3 ckpt reloads deterministically (verified 2x) but n=1 recipe (violent mid-run
+  KL excursion) — reproducibility-across-seeds unproven. NAV-logit is a NON-indicator here
+  (+2.23 when failed vs +1.04 when passed) -> LSTM state matters, not just the static logit.
+
+| D | BC->consolidate T=32 faithful-LSTM, ramp15 | 100 | 3/3 | 64 | n/a | DEPLOYABLE consolidated gatherer; LSTM-bias fix general win |
+
+## Remaining (next priorities)
+1. runD reproducibility (2nd seed) — confirm recipe robust, not a 1-off.
+2. real-MC HARVEST-chain gap: seed_1 navigate transfers (0->60) but NO seed hits 64 on real
+   (46-60) = the documented sim-real HARVEST fidelity gap. THE blocker for true real 3/3.
+3. promote consolidated gatherer through real pipeline (determinism+promote) = M1 closure.

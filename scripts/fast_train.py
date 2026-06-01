@@ -24,20 +24,21 @@ Correctness notes (see report / commit message for the full rationale):
  - GAE term-vs-trunc: vec_sim overwrites the terminal obs on auto-reset, so the
    true final obs is lost. Bootstrap = 0 on term, = pre-step V(obs_t)=buf_val[t]
    on trunc, = next_val otherwise; lastgae reset to 0 on term|trunc.
- - LSTM update-forward approximation: the module takes one start-state per
-   sequence and cannot re-zero mid-sequence, so a T-chunk crossing an episode
-   boundary runs the LSTM across it during the update (collection is exact and
-   DOES re-zero). Episodes here are short (one-shot harvest), so essentially
-   EVERY T=32 chunk crosses a boundary (seq_cross ~1.0) -- this is structural,
-   not a footnote. We measure its impact directly via the first-minibatch probe:
-   on the first minibatch of the first epoch the params are unchanged from
-   collection, so a faithful replay gives approx_kl/clipfrac ~0. Measured:
-   first_mb KL ~0.001, clipfrac ~0.01 -- i.e. the cross-boundary LSTM replay
-   does NOT materially corrupt the PPO ratio in practice, despite seq_cross~1.
-   The exact (module-safe) fix would be to re-segment each rollout at episode
-   boundaries and replay each segment from a zero start-state; the probe shows
-   it is not needed for the gatherer. We log both seq_cross and the first_mb
-   probe every iter so the approximation stays visible and falsifiable.
+ - LSTM update-forward FIDELITY (update_forward, faithful=True): the module
+   takes one start-state per sequence and cannot re-zero mid-sequence. Episodes
+   here are short (one-shot harvest), so essentially EVERY T=32 chunk crosses an
+   episode boundary (seq_cross ~1.0). The OLD start-state-only update ran the
+   LSTM across the boundary while COLLECTION re-zeroed on done -> the update
+   hidden-state trajectory diverged and the PPO ratio was biased. Benign for a
+   high-entropy policy but CATASTROPHIC for a sharp BC clone (first_mb KL 0.71 at
+   T=32), eroding a cloned navigate-then-harvest policy. FIX: truncated-BPTT(1)
+   -- fold (mb, T) -> (mb*T, 1) and feed the STORED per-timestep collection
+   states (buf_h0/buf_c0[t]) as STATE_IN, so the update state-trajectory ==
+   collection's INCLUDING the post-done re-zero. With params unchanged the
+   update logp == collection logp per timestep: the first-minibatch probe
+   measures first_mb KL = -0.00000 at T=32 (was 0.71), held across all 100 iters
+   of RUN D. We log seq_cross and the first_mb probe every iter so the fidelity
+   stays visible and falsifiable.
 """
 
 from __future__ import annotations
@@ -144,6 +145,77 @@ def apply_skill_mask(adi, skill_mask):
     neg = torch.finfo(adi.dtype).min / 2
     adi[:, s:e] = torch.where(keep, adi[:, s:e], torch.full_like(adi[:, s:e], neg))
     return adi
+
+
+# LSTM-faithfulness fix (the crux). COLLECTION threads the per-env hidden state
+# one tick at a time and RE-ZEROS it on every episode `done` (auto-reset). The
+# naive UPDATE forward runs the module's nn.LSTM over the whole T-chunk from a
+# SINGLE chunk-start state, so it cannot re-zero mid-chunk: when a chunk crosses
+# an episode boundary (almost always, for short gatherer episodes -> seq_cross
+# ~1.0) the update hidden-state trajectory diverges from collection's, biasing
+# the new/old PPO ratio. Benign for a high-entropy policy, CATASTROPHIC for a
+# sharp BC clone (first_mb KL 0.5-0.7), which corrupts the update and erodes the
+# cloned navigate-then-harvest policy.
+#
+# faithful=True reproduces the collection trajectory EXACTLY via truncated-BPTT
+# (1 step): collapse (mb, T) -> (mb*T, 1) and feed the STORED per-timestep
+# collection states (buf_h_seq/buf_c_seq, already detached => stop-grad on the
+# carried state) as STATE_IN. Each timestep's forward then starts from precisely
+# the hidden state collection used at that tick, INCLUDING the post-`done`
+# re-zero, so with UNCHANGED params the update logp == collection logp per
+# timestep (first_mb KL ~0) across boundaries. Gradient does not flow across
+# timesteps through the recurrence (the accepted TBPTT-1 price; fine for
+# consolidating an already-trained clone). faithful=False is the legacy
+# start-state-only path (uses s_h0/s_c0 only), kept so the replay-invariant test
+# can demonstrate the bug.
+def update_forward(
+    mod,
+    mb_obs,
+    skill_mask_seq,
+    act_seq,
+    s_h0,
+    s_c0,
+    buf_h_seq,
+    buf_c_seq,
+    *,
+    T,
+    faithful,
+):
+    """Recompute (new_logp, entropy, vf, adi_flat) for a PPO update minibatch."""
+    mbb = skill_mask_seq.shape[0]
+    if faithful:
+        # TBPTT-1: fold each timestep into the batch as a length-1 sequence so it
+        # starts from its STORED collection state. Row index == env*T + t
+        # (env-major, t-minor), matching how mb_obs / skill / act / states stack.
+        def _fold(v):
+            if isinstance(v, dict):
+                return {k: _fold(sub) for k, sub in v.items()}
+            return v.reshape(mbb * T, 1, *v.shape[2:])  # (mb,T,...) -> (mb*T,1,...)
+
+        obs_in = _fold(mb_obs)
+        h_in = buf_h_seq.reshape(mbb * T, -1)
+        c_in = buf_c_seq.reshape(mbb * T, -1)
+        out = mod._forward_train({Columns.OBS: obs_in, Columns.STATE_IN: {"h": h_in, "c": c_in}})
+        adi_seq = out[Columns.ACTION_DIST_INPUTS].reshape(mbb * T, -1)
+        vf = out[Columns.VF_PREDS].reshape(mbb, T)
+    else:
+        out = mod._forward_train({Columns.OBS: mb_obs, Columns.STATE_IN: {"h": s_h0, "c": s_c0}})
+        adi = out[Columns.ACTION_DIST_INPUTS]
+        adi_seq = adi.reshape(-1, adi.shape[-1])
+        vf = out[Columns.VF_PREDS]
+
+    adi_flat = apply_skill_mask(adi_seq, skill_mask_seq.reshape(-1, skill_mask_seq.shape[-1]))
+    dist = mod.action_dist_cls.from_logits(adi_flat)
+
+    act_flat = {}
+    for k, seq in act_seq.items():
+        if seq.ndim > 2:
+            act_flat[k] = seq.reshape(-1, *seq.shape[2:])
+        else:
+            act_flat[k] = seq.reshape(-1)
+    new_logp = dist.logp(act_flat).reshape(mbb, T)
+    ent = dist.entropy().reshape(mbb, T)
+    return new_logp, ent, vf, adi_flat
 
 
 def actions_to_numpy_for_env(act):
@@ -519,7 +591,6 @@ def main() -> None:  # noqa: PLR0912, PLR0915
             for start in range(0, B, args.mb_envs):
                 mb = env_idx[start : start + args.mb_envs]
                 mb_t = torch.as_tensor(mb, device=device, dtype=torch.long)
-                mbb = len(mb)
 
                 mb_obs = {}
                 for k, v0 in buf_obs[0].items():
@@ -556,30 +627,31 @@ def main() -> None:  # noqa: PLR0912, PLR0915
                     v_losses.append(vl)
                     continue
 
-                out = mod._forward_train(
-                    {Columns.OBS: mb_obs, Columns.STATE_IN: {"h": s_h, "c": s_c}}
-                )
-                adi = out[Columns.ACTION_DIST_INPUTS]
-                vf = out[Columns.VF_PREDS]
-
+                # LSTM-faithful PPO forward: per-timestep collection states fed as
+                # STATE_IN (TBPTT-1) so the update state-trajectory == collection's
+                # across auto-reset boundaries -> first_mb KL ~0 even for a sharp
+                # BC clone. buf_h0/buf_c0[t] are the pre-step collection states.
                 skill_mask_seq = torch.stack(
                     [buf_obs[t]["action_mask"]["skill_type"][mb_t] for t in range(T)], dim=1
                 )
-                adi_flat = apply_skill_mask(
-                    adi.reshape(-1, adi.shape[-1]),
-                    skill_mask_seq.reshape(-1, skill_mask_seq.shape[-1]),
+                act_seq = {
+                    k: torch.stack([buf_act[t][k][mb_t] for t in range(T)], dim=1)
+                    for k in buf_act[0]
+                }
+                buf_h_seq = torch.stack([buf_h0[t][mb_t] for t in range(T)], dim=1)
+                buf_c_seq = torch.stack([buf_c0[t][mb_t] for t in range(T)], dim=1)
+                new_logp, ent, vf, _adi = update_forward(
+                    mod,
+                    mb_obs,
+                    skill_mask_seq,
+                    act_seq,
+                    s_h,
+                    s_c,
+                    buf_h_seq,
+                    buf_c_seq,
+                    T=T,
+                    faithful=True,
                 )
-                dist = mod.action_dist_cls.from_logits(adi_flat)
-
-                act_flat = {}
-                for k in buf_act[0]:
-                    seq = torch.stack([buf_act[t][k][mb_t] for t in range(T)], dim=1)
-                    if seq.ndim > 2:
-                        act_flat[k] = seq.reshape(-1, *seq.shape[2:])
-                    else:
-                        act_flat[k] = seq.reshape(-1)
-                new_logp = dist.logp(act_flat).reshape(mbb, T)
-                ent = dist.entropy().reshape(mbb, T)
 
                 old_logp = buf_logp[:, mb].T
                 mb_adv = adv_norm[:, mb].T
