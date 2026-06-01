@@ -266,3 +266,16 @@ select.inp { cursor:pointer; }
 @keyframes blink { 0%,100% { opacity:0.25; } 50% { opacity:1; } }
 
 @media (max-width:1100px) { .content { padding:20px; } }
+
+/* ---------- Tauri desktop (real OS window): full-bleed ----------
+   In the native EXE the OS window IS the frame, so drop the .desktop backdrop
+   padding and the floating-window max-size/border/radius/shadow that otherwise
+   render as a "window inside a window". The browser preview (no .tauri class)
+   keeps the floating look. */
+html.tauri, html.tauri body { background:var(--void); }
+html.tauri .desktop { padding:0; background:var(--void); }
+html.tauri .desktop::before { display:none; }
+html.tauri .app-window {
+  max-width:none; max-height:none; width:100%; height:100%;
+  border:none; border-radius:0; box-shadow:none; animation:none;
+}
