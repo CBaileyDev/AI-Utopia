@@ -242,6 +242,13 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         default="",
         help="path to torch.save the trained module state_dict",
     )
+    ap.add_argument(
+        "--load-weights",
+        type=str,
+        default="",
+        help="path to a state_dict to load BEFORE training (e.g. a BC warm-start). "
+        "Combine with --iters 0 --gate-check to evaluate a checkpoint with no training.",
+    )
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -250,6 +257,14 @@ def main() -> None:  # noqa: PLR0912, PLR0915
 
     B, T = args.num_envs, args.horizon
     mod = build_module(device)
+    if args.load_weights:
+        sd = torch.load(args.load_weights, map_location=device)
+        missing, unexpected = mod.load_state_dict(sd, strict=False)
+        print(
+            f"loaded weights <- {args.load_weights} "
+            f"(missing={len(missing)} unexpected={len(unexpected)})",
+            flush=True,
+        )
     opt = torch.optim.Adam(mod.parameters(), lr=args.lr)
 
     # TRAINING-only curriculum (parity-gated in VecGathererSim; default off). Any
