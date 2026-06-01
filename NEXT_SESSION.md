@@ -3,6 +3,27 @@
 This supersedes the earlier post-v20 handoff. Read `PROJECT_CONTEXT.md` for the
 big picture; this captures the current frontier.
 
+## ⏩⏩⏩ START HERE (2026-06-01) — BC-anchor + variance-controlled real gate (PR #1)
+
+Read `Research/SESSION_2026-06-01_BC_ANCHOR_AND_VARIANCE_GATE.md`. Built + unit-tested +
+committed on branch `claude/handoff-review-1I8qK`: (1) a **BC-anchor** in
+`scripts/fast_train.py` (`--bc-anchor-coeff`) that re-applies the demonstrator's
+navigate-then-harvest supervision on fresh force-masked spawns each finetune iter;
+(2) a **variance-controlled real-MC gate** in `scripts/transfer_eval_bc.py`
+(`--repeats`/`--pass-threshold` → gate on a success RATE, not n=1 — the P0 blocker
+tool); (3) an RNG-isolation fix making the anchor cleanly A/B-able; (4) a cross-hardware
+LSTM-replay tolerance fix. Full suite 275 green.
+
+**HONEST STATUS — do NOT over-claim the anchor.** On CPU at reduced scale the control
+consolidation did **not** erode navigate (held sim 3/3, seed_1=64), so it never
+reproduced the RUN D2 erosion the anchor targets. The anchor *mechanism* is confirmed
+(raises the navigate logit +1.98→+2.73) but with no erosion to fix its perturbation
+mildly hurt the unmasked seeds (1/3 vs control 3/3). The anchor's benefit is **UNVERIFIED**
+— it must be tested in the actual erosion regime (full-scale B=512 RUN D2 recipe, the
+eroding seed) on the GPU; the RNG fix makes that a clean A/B. **NEXT:** run the variance
+gate on the live server, and reproduce-then-fix RUN D2 erosion at full scale before
+trusting the anchor. (No live Fabric server / GPU in the cloud container this session.)
+
 ## ⏩⏩ START HERE (2026-05-30 PM) — PEACEFUL-WORLD PIVOT + natural-terrain perception FIXED
 
 User set the scope to a **peaceful survival world** (combat/threat layer descoped — see
