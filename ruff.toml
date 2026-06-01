@@ -20,6 +20,12 @@ ignore = [
 
 [lint.per-file-ignores]
 "tests/**/*.py" = ["PLR2004", "B018"]
+# The GUI backend lazy-imports heavy deps (chromadb/py4j/ray/torch) INSIDE
+# route handlers by design (server boots in <1s; a dead Minecraft server only
+# fails the agent routes). create_app() is a route-registration factory whose
+# statement count is inherent. These are intentional, not lint debt.
+"src/aiutopia/api/app.py" = ["PLC0415", "PLR0915"]
+"src/aiutopia/api/__main__.py" = ["PLC0415"]
 
 [format]
 quote-style = "double"

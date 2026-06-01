@@ -49,3 +49,11 @@ Research/*.log.pid
 Research/*.log.session*
 Research/*.pid
 Research/.probe-*
+
+# Runtime data (created by GUI/spawn; WAL SQLite must stay off the repo per CLAUDE.md)
+identity.db
+identity.db-*
+chroma/
+planner_state.db*
+config/rewards.json
+Research/train-gui-*.pid

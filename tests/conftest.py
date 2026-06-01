@@ -1,11 +1,23 @@
 """Shared pytest fixtures: tmp DBs, Chroma client, env config."""
+
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+# HERMETIC REWARD CONFIG: aiutopia.env.reward rebinds its public constants from
+# load_reward_config() AT IMPORT, resolving an on-disk overlay (default:
+# <repo>/config/rewards.json — exactly where the GUI's PUT /api/rewards writes).
+# Pin the overlay path to a guaranteed-absent file BEFORE any test imports reward,
+# so the suite always sees the literal defaults regardless of a stray config left
+# on disk by a developer using the GUI. Set at module import (collection time),
+# before reward.py is first imported by a test module.
+os.environ.setdefault(
+    "AIUTOPIA_REWARD_CONFIG",
+    str(Path(__file__).resolve().parent / "_nonexistent_rewards_overlay.json"),
+)
 
 from aiutopia.common.config import Paths
 from aiutopia.common.logging import setup_logging

@@ -5,7 +5,11 @@ scarcity weights + LLM-driven targets) are deferred to M2-M5."""
 
 from __future__ import annotations
 
-from typing import Literal
+import copy
+import json
+import os
+from pathlib import Path
+from typing import Any, Literal
 
 import numpy as np
 
@@ -193,6 +197,22 @@ GAMMA = 0.99  # PBRS discount
 DEATH_PENALTY = 10.0
 TIME_PENALTY = 0.001
 GAMMA_CLIP = 0.05  # per axis (§5.5)
+
+
+# Frozen snapshot of the literal DEFAULTS, captured before any on-disk overlay is
+# applied (see the rebind at module bottom). build_default_reward_config() reads
+# THESE — never the public names — so it always returns the historical literals
+# even after the public constants have been overridden by a GUI-written config.
+_DEFAULT_LOG_VALUE: dict[str, float] = dict(LOG_VALUE)
+_DEFAULT_GAMMA: float = GAMMA
+_DEFAULT_TIME_PENALTY: float = TIME_PENALTY
+_DEFAULT_DEATH_PENALTY: float = DEATH_PENALTY
+_DEFAULT_ROLE_TASK_ITEMS: dict[str, frozenset[str]] = {
+    role: frozenset(items) for role, items in ROLE_TASK_ITEMS.items()
+}
+_DEFAULT_ROLE_INVENTORY_CAPS: dict[str, dict[str, int]] = {
+    role: dict(caps) for role, caps in ROLE_INVENTORY_CAPS.items()
+}
 
 
 def _delta_inventory(prev: dict[str, int], curr: dict[str, int]) -> dict[str, int]:
@@ -543,3 +563,148 @@ def _compute_reward_stage_1_farmer(
     r_exploits = sum(p for _, p in exploit_penalties)
 
     return r_principal + r_pbrs - r_death - r_time - r_exploits - r_clip
+
+
+# =====================================================================
+# Reward-config externalization (GUI-editable overlay).
+#
+# The constants above (LOG_VALUE, GAMMA, TIME_PENALTY, DEATH_PENALTY,
+# ROLE_TASK_ITEMS, ROLE_INVENTORY_CAPS) are the parity-critical DEFAULTS,
+# shared byte-for-byte by sim + real backends and asserted by the reward /
+# parity suites. The helpers below let the desktop GUI read those defaults and
+# write an on-disk JSON overlay WITHOUT a code edit.
+#
+# Important: with NO config file present the merged values equal the literal
+# constants exactly (the suite's parity gate). Values are bound at import time
+# (vec_sim.py does `from reward import GAMMA`), so a GUI write takes effect on
+# the NEXT process / training start — there is no hot-reload (that would
+# re-introduce the parity risk this design avoids).
+# =====================================================================
+
+
+def build_default_reward_config() -> dict[str, Any]:
+    """Snapshot the literal DEFAULT reward constants into the GUI/JSON shape.
+
+    Reads the frozen ``_DEFAULT_*`` snapshots (not the public, possibly-overridden
+    names), so it always yields the historical literals. frozensets become sorted
+    lists so the result is JSON-serializable.
+    """
+    return {
+        "log_value": dict(_DEFAULT_LOG_VALUE),
+        "pbrs": {
+            "gamma": _DEFAULT_GAMMA,
+            "time_penalty": _DEFAULT_TIME_PENALTY,
+            "death_penalty": _DEFAULT_DEATH_PENALTY,
+        },
+        "role_task_items": {
+            role: sorted(items) for role, items in _DEFAULT_ROLE_TASK_ITEMS.items()
+        },
+        "role_caps": {
+            role: dict(caps) for role, caps in _DEFAULT_ROLE_INVENTORY_CAPS.items()
+        },
+    }
+
+
+def deep_merge_reward_config(
+    base: dict[str, Any], overlay: dict[str, Any]
+) -> dict[str, Any]:
+    """Per-key recursive merge of ``overlay`` over a copy of ``base``.
+
+    Partial overlays are honored: ``{"log_value": {"oak_log": 2.0}}`` updates
+    only ``oak_log`` and keeps the other items. Lists / scalars in the overlay
+    replace the base value at that key.
+    """
+    out = copy.deepcopy(base)
+    for key, val in overlay.items():
+        if (
+            key in out
+            and isinstance(out[key], dict)
+            and isinstance(val, dict)
+        ):
+            out[key] = deep_merge_reward_config(out[key], val)
+        else:
+            out[key] = copy.deepcopy(val)
+    return out
+
+
+def reward_config_to_serializable(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Coerce a config dict to a JSON-safe structure (frozenset -> sorted list)."""
+    out = copy.deepcopy(cfg)
+    rti = out.get("role_task_items")
+    if isinstance(rti, dict):
+        out["role_task_items"] = {
+            role: sorted(items) if isinstance(items, (set, frozenset)) else items
+            for role, items in rti.items()
+        }
+    return out
+
+
+def reward_config_path() -> Path | None:
+    """Resolve the active reward-config overlay path (first existing wins).
+
+    1. $AIUTOPIA_REWARD_CONFIG (explicit file path; used even if absent — it is
+       the canonical write target for the GUI).
+    2. $AIUTOPIA_ROOT/config/rewards.json
+    3. <repo>/config/rewards.json
+    Returns the path the loader will read (may not exist), or None if no
+    candidate base is resolvable.
+    """
+    explicit = os.environ.get("AIUTOPIA_REWARD_CONFIG")
+    if explicit:
+        return Path(explicit).expanduser()
+    root = os.environ.get("AIUTOPIA_ROOT")
+    if root:
+        return Path(root).expanduser() / "config" / "rewards.json"
+    # repo fallback: this file is src/aiutopia/env/reward.py → repo is 4 parents up
+    return Path(__file__).resolve().parents[3] / "config" / "rewards.json"
+
+
+def load_reward_config() -> dict[str, Any]:
+    """Return defaults deep-merged with the on-disk overlay if it exists.
+
+    With no overlay file the result equals ``build_default_reward_config()``
+    exactly (byte-identical to the historical literals).
+    """
+    cfg = build_default_reward_config()
+    path = reward_config_path()
+    if path is not None and path.is_file():
+        try:
+            overlay = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return cfg
+        if isinstance(overlay, dict):
+            cfg = deep_merge_reward_config(cfg, overlay)
+    return cfg
+
+
+def _apply_reward_config(cfg: dict[str, Any]) -> None:
+    """Rebind the public reward constants from a loaded config dict.
+
+    This is what makes a GUI-written overlay actually affect the reward math:
+    LOG_VALUE / GAMMA / TIME_PENALTY / DEATH_PENALTY / ROLE_TASK_ITEMS /
+    ROLE_INVENTORY_CAPS are reassigned from ``cfg``. Type fidelity is preserved
+    (ROLE_TASK_ITEMS values become frozensets again; caps stay ints) so the math's
+    membership semantics and the tests' frozenset assertions hold.
+    """
+    global LOG_VALUE, GAMMA, TIME_PENALTY, DEATH_PENALTY  # noqa: PLW0603
+    global ROLE_TASK_ITEMS, ROLE_INVENTORY_CAPS  # noqa: PLW0603
+    pbrs = cfg.get("pbrs", {})
+    LOG_VALUE = dict(cfg.get("log_value", _DEFAULT_LOG_VALUE))
+    GAMMA = float(pbrs.get("gamma", _DEFAULT_GAMMA))
+    TIME_PENALTY = float(pbrs.get("time_penalty", _DEFAULT_TIME_PENALTY))
+    DEATH_PENALTY = float(pbrs.get("death_penalty", _DEFAULT_DEATH_PENALTY))
+    ROLE_TASK_ITEMS = {
+        role: frozenset(items) for role, items in cfg.get("role_task_items", {}).items()
+    }
+    ROLE_INVENTORY_CAPS = {
+        role: {item: int(cap) for item, cap in caps.items()}
+        for role, caps in cfg.get("role_caps", {}).items()
+    }
+
+
+# Wire the (optionally overlaid) config into the public constants AT IMPORT.
+# With no on-disk overlay file, load_reward_config() == build_default_reward_config()
+# and this rebind is a no-op on the values (byte-identical to the literals); the
+# parity + reward suites stay green. A GUI-written config/rewards.json overrides
+# the values for the NEXT process / training start (no hot-reload).
+_apply_reward_config(load_reward_config())
