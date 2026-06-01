@@ -14,15 +14,16 @@ navigate-then-harvest supervision on fresh force-masked spawns each finetune ite
 tool); (3) an RNG-isolation fix making the anchor cleanly A/B-able; (4) a cross-hardware
 LSTM-replay tolerance fix. Full suite 275 green.
 
-**HONEST STATUS — do NOT over-claim the anchor.** On CPU at reduced scale the control
-consolidation did **not** erode navigate (held sim 3/3, seed_1=64), so it never
-reproduced the RUN D2 erosion the anchor targets. The anchor *mechanism* is confirmed
-(raises the navigate logit +1.98→+2.73) but with no erosion to fix its perturbation
-mildly hurt the unmasked seeds (1/3 vs control 3/3). The anchor's benefit is **UNVERIFIED**
-— it must be tested in the actual erosion regime (full-scale B=512 RUN D2 recipe, the
-eroding seed) on the GPU; the RNG fix makes that a clean A/B. **NEXT:** run the variance
-gate on the live server, and reproduce-then-fix RUN D2 erosion at full scale before
-trusting the anchor. (No live Fabric server / GPU in the cloud container this session.)
+**STATUS — anchor VERIFIED on seed 0 (CPU); confirm at full scale next.** A 120-iter
+consolidation with `--gate-every 20` reproduced the RUN D2 erosion in the unanchored
+control (seed_1 navigate 64→0, permanent; harvest survives → final **2/3**) and showed the
+anchored run holds/recovers to **3/3** (64/64/64). So the anchor's benefit is no longer
+hypothetical — it prevents erosion in a regime that demonstrably erodes the control.
+Caveat: one seed, CPU, B=256, a deliberately hot lr (7e-5) chosen to force erosion. **NEXT:**
+(1) run the variance gate on the live server (`transfer_eval_bc.py --repeats 5 --warmup`);
+(2) replay the anchor A/B at full scale (B=512, the RUN D2 seed) across ≥2 seeds before
+promoting — the RNG-isolation fix makes coeff=0 vs >0 a clean A/B. (No live Fabric server /
+GPU in the cloud container this session — all of the above ran in the headless sim.)
 
 ## ⏩⏩ START HERE (2026-05-30 PM) — PEACEFUL-WORLD PIVOT + natural-terrain perception FIXED
 
