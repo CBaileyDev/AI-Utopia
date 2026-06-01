@@ -530,6 +530,14 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         from aiutopia.sim.bc_demonstrator import demonstrate  # noqa: PLC0415
 
         AB = args.bc_anchor_envs
+        # Dedicated RNG for the anchor's per-iter spawn seeds. CRITICAL for a clean
+        # A/B: the main update loop draws minibatch shuffles from the GLOBAL numpy
+        # RNG (np.random.shuffle), so if the anchor drew its seeds from the same
+        # stream, turning the anchor on would desync every subsequent shuffle and
+        # the coeff=0 (control) vs coeff>0 (treatment) runs would diverge from RNG
+        # drift ALONE -- confounding the anchor's true effect. An isolated Generator
+        # leaves the global stream byte-identical whether the anchor is on or off.
+        anchor_rng = np.random.default_rng(args.seed + 0x5BC0)
         anchor_sim = VecGathererSim(
             num_envs=AB,
             max_episode_ticks=args.max_ep_ticks,
@@ -788,8 +796,8 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         # changes the gate env, only the training gradient on masked spawns.
         anchor_ce = anchor_mse = float("nan")
         if anchor_on and not is_warmup:
-            anchor_seeds = np.random.randint(1, 2**31 - 1, size=args.bc_anchor_envs).astype(
-                np.int64
+            anchor_seeds = anchor_rng.integers(
+                1, 2**31 - 1, size=args.bc_anchor_envs, dtype=np.int64
             )
             a_obs = anchor_sim.reset(anchor_seeds)
             a_obs_t = obs_to_tensors(a_obs, device)
