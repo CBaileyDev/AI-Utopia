@@ -79,3 +79,22 @@ determinism->promote) + a real-MC transfer check.
 2. real-MC HARVEST-chain gap: seed_1 navigate transfers (0->60) but NO seed hits 64 on real
    (46-60) = the documented sim-real HARVEST fidelity gap. THE blocker for true real 3/3.
 3. promote consolidated gatherer through real pipeline (determinism+promote) = M1 closure.
+
+## RUN D2 (reproducibility) REFUTES runD-as-deployable
+seed 2, SAME recipe: gate 2/3, seed_1=0. So runD's 3/3 was a LUCKY SEED — PPO consolidation
+is NOT reliable: it erodes the cloned navigate (unmasked HARVEST-one-shot episodes dominate
+the gradient -> pull back to HARVEST-press). Honest: BC-alone is the reliable sim 3/3;
+PPO-from-BC does NOT reliably preserve it. Reliable consolidation likely needs a BC-anchor /
+distillation term (KL to the FROZEN BC policy) kept on during finetune, not just per-iter KL.
+
+| D2 | repro seed2, same recipe | 100 | 2/3 | 0 | n/a | runD 3/3 was a LUCKY SEED; consolidation unreliable (erodes navigate) |
+
+## HONEST STATE (advisor-corrected)
+- Real gate = 0/3 for the BC policy (60/46/46 — ALL fail; NOT "partial transfer of seed_1",
+  it's "doesn't pass real gate, cause unknown"). The "N21 harvest-chain gap" is an IMPORTED
+  assumption, NOT verified this session.
+- Durable NON-sim-only wins: (1) LSTM update-ratio-bias fix (general, test-backed); (2)
+  BC-cracks-seed_1-IN-SIM as a method. The deployable REAL gatherer is NOT done.
+- Discriminator running: known HARVEST-spam policy on same real instance -> 64 => arena fine
+  + BC real-harvest behavior bug; ~46 => infra/arena confounded (all real numbers suspect).
+- NAV-logit is a NON-indicator (refuted by runD). Trust only per-seed oak + action traces.
