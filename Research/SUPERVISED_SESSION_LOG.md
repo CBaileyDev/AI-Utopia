@@ -110,3 +110,10 @@ Note: real seed_1=64 for BOTH policies, opposite of sim (where seed_1 is the mas
 one) -> a sim<->real geometry discrepancy at seed_1 too, but secondary to the infra issue.
 NEXT: restart instances clean -> re-run HARVEST-spam discriminator; if it recovers 3/3,
 arena was stale and BC's real number can be re-measured cleanly.
+
+## FRESH-instance discriminator: confirms real-MC is HIGH-VARIANCE
+After clean restart (setup=True x4), HARVEST-spam on fresh 25001: seed_1=58, seed_2=64
+(seed_3 grinding). vs stale run 64/46/58. Per-seed swings 46<->64 ACROSS RUNS regardless of
+policy/freshness => real HARVEST non-determinism (documented fidelity finding) dominates.
+VERDICT: real-MC eval is UNMEASURABLE at n=1. Need N>=5 evals/seed gated on a rate, OR fix
+the real HARVEST non-determinism (the #1 Phase-C item). See HANDOFF.md sec 3 + 5.
