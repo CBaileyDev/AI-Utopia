@@ -98,3 +98,15 @@ distillation term (KL to the FROZEN BC policy) kept on during finetune, not just
 - Discriminator running: known HARVEST-spam policy on same real instance -> 64 => arena fine
   + BC real-harvest behavior bug; ~46 => infra/arena confounded (all real numbers suspect).
 - NAV-logit is a NON-indicator (refuted by runD). Trust only per-seed oak + action traces.
+
+## DISCRIMINATOR (decisive): real-MC is INFRA-CONFOUNDED, not a policy/navigate problem
+Known-good HARVEST-spam policy (fast_train_gatherer_peak) on the SAME real instances:
+seed_1=64, seed_2=46, seed_3=58 -> 1/3. It ALSO fails seed_2/3. Per advisor's discriminator
+logic: a known-good policy scoring ~46-58 on seed_2/3 means the instances/ARENA are
+degraded/stale (up ~24h+, many episodes; reset_episode likely not fully clearing dropped
+items/chunk state) -> ALL real numbers (BC 60/46/46 AND HARVEST-spam 64/46/58) are
+INFRA-CONFOUNDED. "BC real gate 0/3" is INCONCLUSIVE, not a real failure.
+Note: real seed_1=64 for BOTH policies, opposite of sim (where seed_1 is the masked-hard
+one) -> a sim<->real geometry discrepancy at seed_1 too, but secondary to the infra issue.
+NEXT: restart instances clean -> re-run HARVEST-spam discriminator; if it recovers 3/3,
+arena was stale and BC's real number can be re-measured cleanly.
