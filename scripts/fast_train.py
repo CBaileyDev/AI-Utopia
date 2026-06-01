@@ -332,6 +332,48 @@ def seed1_navigate_probe(mod, device) -> str:
         env.close()
 
 
+def run_gate_check(mod, device, *, tag: str = "") -> float:
+    """Mask-aware greedy eval on the 3 M1 sim scenarios; prints per-seed oak + the
+    seed_1 NAVIGATE-logit probe. Returns the success rate. Restores train mode after.
+
+    EVAL stays CLEAN: the env_config carries NO curriculum keys, so the eval env
+    defaults spawn_jitter/approach_shaping/force_masked_spawn OFF and uses the FIXED
+    scenario seed -- training-time curriculum cannot leak into the gate measurement.
+    """
+    from aiutopia.env.reward import _inventory_from_obs  # noqa: PLC0415
+    from aiutopia.train.scenario_runner import (  # noqa: PLC0415
+        M1_SCENARIOS,
+        aggregate_success_rate,
+        run_scenario,
+    )
+
+    was_training = mod.training
+    mod.eval()
+    try:
+        prefix = f"[gate{(' ' + tag) if tag else ''}] "
+        # Supervised leading indicator: the seed_1 NAVIGATE-logit (the basin-escape
+        # signal precedes the gate flipping) -- watch this for erosion over a run.
+        print(prefix + seed1_navigate_probe(mod, device), flush=True)
+        gate_results = []
+        for sc in M1_SCENARIOS:
+            res = run_scenario(
+                sc,
+                env_config={"active_roles": ["gatherer"], "backend": "sim"},
+                rl_module=mod,
+                device=device,
+            )
+            gate_results.append(res)
+            final = res.get("final_inventory", {}).get("gatherer_0", {})
+            oak = _inventory_from_obs(final).get("oak_log", 0) if final else 0
+            print(f"{prefix}{res['name']}: success={res['success']} oak={oak}", flush=True)
+        sr = aggregate_success_rate(gate_results)
+        print(f"{prefix}M1 GATE success_rate (mask-aware greedy eval): {sr:.3f}", flush=True)
+        return sr
+    finally:
+        if was_training:
+            mod.train()
+
+
 def main() -> None:  # noqa: PLR0912, PLR0915
     ap = argparse.ArgumentParser()
     ap.add_argument("--num-envs", type=int, default=512)
@@ -392,6 +434,13 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         "--gate-check",
         action="store_true",
         help="run 3 M1 scenarios (mask-aware greedy) post-train",
+    )
+    ap.add_argument(
+        "--gate-every",
+        type=int,
+        default=0,
+        help="if >0, also run the gate every N iters DURING training (watch the "
+        "seed_1 navigate trajectory consolidate vs erode). 0 = only post-train.",
     )
     ap.add_argument(
         "--save-weights",
@@ -867,6 +916,11 @@ def main() -> None:  # noqa: PLR0912, PLR0915
             flush=True,
         )
 
+        # Periodic gate during training: watch the seed_1 navigate consolidate or
+        # erode. Skipped on the final iter (the post-train gate covers it).
+        if args.gate_every > 0 and it % args.gate_every == 0 and it < args.iters - 1:
+            run_gate_check(mod, device, tag=f"it{it}")
+
     warm = sps_hist[1:] if len(sps_hist) > 1 else sps_hist  # drop iter 0 (CUDA init)
     med_sps = float(np.median(warm)) if warm else float("nan")
     lo_sps = float(np.min(warm)) if warm else float("nan")
@@ -886,40 +940,7 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         print(f"saved weights -> {args.save_weights}", flush=True)
 
     if args.gate_check:
-        from aiutopia.env.reward import _inventory_from_obs  # noqa: PLC0415
-        from aiutopia.train.scenario_runner import (  # noqa: PLC0415
-            M1_SCENARIOS,
-            aggregate_success_rate,
-            run_scenario,
-        )
-
-        mod.eval()
-        # Supervised leading indicator: print the seed_1 NAVIGATE-logit line every
-        # run (the basin-escape signal precedes the gate flipping).
-        print(seed1_navigate_probe(mod, device), flush=True)
-        gate_results = []
-        for sc in M1_SCENARIOS:
-            res = run_scenario(
-                sc,
-                # EVAL stays CLEAN: this env_config carries NO curriculum keys, so the
-                # eval env defaults spawn_jitter/approach_shaping/force_masked_spawn
-                # OFF and uses the FIXED scenario seed. Training-time curriculum cannot
-                # leak into the gate measurement.
-                env_config={"active_roles": ["gatherer"], "backend": "sim"},
-                rl_module=mod,
-                device=device,
-            )
-            gate_results.append(res)
-            # Per-seed oak count (not just success): the SAME _inventory_from_obs the
-            # gate predicate uses, over the final obs run_scenario returns.
-            final = res.get("final_inventory", {}).get("gatherer_0", {})
-            oak = _inventory_from_obs(final).get("oak_log", 0) if final else 0
-            print(
-                f"  gate {res['name']}: success={res['success']} oak={oak}",
-                flush=True,
-            )
-        sr = aggregate_success_rate(gate_results)
-        print(f"M1 GATE success_rate (mask-aware greedy eval): {sr:.3f}", flush=True)
+        run_gate_check(mod, device, tag="final")
 
 
 if __name__ == "__main__":
