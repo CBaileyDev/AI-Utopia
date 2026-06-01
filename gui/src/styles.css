@@ -265,6 +265,41 @@ select.inp { cursor:pointer; }
 .line-draw { }
 @keyframes blink { 0%,100% { opacity:0.25; } 50% { opacity:1; } }
 
+/* ---------- Data-state primitives (loading / empty / offline / toast) ---------- */
+.offline-pill {
+  display:inline-flex; align-items:center; gap:6px;
+  height:20px; padding:0 9px; border-radius:999px;
+  background:rgba(255,68,102,0.08); border:1px solid rgba(255,68,102,0.28);
+  color:var(--status-offline); font-size:9px; font-weight:500; letter-spacing:0.08em;
+  white-space:nowrap; user-select:none;
+}
+.offline-pill-dot { width:5px; height:5px; border-radius:999px; background:var(--status-offline); box-shadow:0 0 6px rgba(255,68,102,0.6); animation:pulseSoft 2.2s ease-in-out infinite; }
+
+.skel {
+  display:inline-block;
+  background:linear-gradient(90deg, var(--surface-2) 0%, var(--elevated) 40%, var(--surface-2) 80%);
+  background-size:200% 100%; animation:skelShimmer 1.4s ease-in-out infinite;
+}
+@keyframes skelShimmer { 0% { background-position:200% 0; } 100% { background-position:-200% 0; } }
+
+.empty-state {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  flex:1; min-height:120px; padding:24px; text-align:center;
+}
+
+.toast-stack { position:fixed; bottom:46px; right:22px; display:flex; flex-direction:column; gap:8px; z-index:50; pointer-events:none; }
+.toast {
+  pointer-events:auto; cursor:pointer;
+  display:flex; align-items:center; gap:9px;
+  max-width:340px; padding:10px 13px; border-radius:10px;
+  background:var(--elevated); border:1px solid var(--border-subtle);
+  box-shadow:0 8px 28px rgba(0,0,0,0.45); color:var(--text-secondary);
+  animation:reveal 0.3s var(--ease) both;
+}
+.toast-success { border-color:rgba(0,229,204,0.4); color:var(--accent-cyan); }
+.toast-error { border-color:rgba(255,68,102,0.4); color:var(--status-offline); }
+.toast-info { border-color:var(--border-active); }
+
 @media (max-width:1100px) { .content { padding:20px; } }
 
 /* ---------- Tauri desktop (real OS window): full-bleed ----------

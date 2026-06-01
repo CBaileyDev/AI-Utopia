@@ -1,9 +1,12 @@
 /* AI Utopia — Dashboard tab */
 import { useState, useEffect } from 'react';
-import { Card, Reveal, SectionTitle, StatusDot, Avatar, AnimatedNumber } from '../components/primitives.jsx';
+import { Card, Reveal, SectionTitle, StatusDot, Avatar, AnimatedNumber, EmptyState, OfflinePill } from '../components/primitives.jsx';
 import { AreaStack, Donut } from '../lib/charts.jsx';
 import { Icon } from '../lib/icons.jsx';
-import { agents, logs, activity, roleColors, roleMeta, getRoleColor } from '../mockData.js';
+import { activity, logs as MOCK_LOGS, roleColors, roleMeta, getRoleColor } from '../mockData.js';
+import { useResource } from '../useApi.js';
+import { getLogs } from '../api.js';
+import { adaptLogs } from '../lib/transforms.js';
 
 function Metric({ icon, value, label, sub, trend, delay, animated, decimals }) {
   const tc = trend === 'up' ? 'var(--accent-cyan)' : trend === 'down' ? 'var(--status-offline)' : 'var(--text-tertiary)';
@@ -29,7 +32,7 @@ function ActivityTimeline() {
   return (
     <Reveal delay={120} style={{ gridColumn: 'span 8' }}>
       <Card style={{ padding: 18 }}>
-        <SectionTitle right={<span className="t-caption">last 7 hrs</span>}>Agent Activity Timeline</SectionTitle>
+        <SectionTitle right={<span className="t-caption">sample · last 7 hrs</span>}>Agent Activity Timeline</SectionTitle>
         <AreaStack data={activity} keys={['gatherer', 'builder', 'farmer', 'defender']} colors={colors} height={196} />
         <div className="flex items-center" style={{ gap: 18, marginTop: 12 }}>
           {Object.keys(roleMeta).map((r) => (
@@ -44,10 +47,20 @@ function ActivityTimeline() {
   );
 }
 
-function RewardDistribution() {
+function RewardDistribution({ agents }) {
   const total = agents.reduce((s, a) => s + a.rewards, 0);
   const data = agents.map((a) => ({ name: a.name, value: a.rewards, color: getRoleColor(a.role) }));
   const sorted = [...agents].sort((a, b) => b.rewards - a.rewards);
+  if (!agents.length) {
+    return (
+      <Reveal delay={150} style={{ gridColumn: 'span 4' }}>
+        <Card style={{ padding: 18, height: '100%', display: 'flex', flexDirection: 'column' }}>
+          <SectionTitle>Reward Distribution</SectionTitle>
+          <EmptyState icon="trophy" title="No rewards yet" hint="Reward totals appear once agents are spawned and earning." />
+        </Card>
+      </Reveal>
+    );
+  }
   return (
     <Reveal delay={150} style={{ gridColumn: 'span 4' }}>
       <Card style={{ padding: 18, height: '100%' }}>
@@ -80,16 +93,23 @@ function RewardDistribution() {
 const typeColors = { AGENT: 'var(--accent-cyan)', TRAIN: 'var(--accent-lavender)', SYSTEM: 'var(--text-secondary)', CHAT: '#66BB6A' };
 
 function ActivityFeed() {
-  const [feedLogs] = useState(logs);
+  const { data: feedLogs, online } = useResource(getLogs, {
+    fallback: MOCK_LOGS, transform: adaptLogs, pollMs: 3000,
+  });
+  const indicator = online
+    ? <span className="flex items-center t-caption" style={{ gap: 6, color: 'var(--accent-cyan)' }}><StatusDot status="alive" size={6} /> LIVE</span>
+    : <OfflinePill />;
   return (
     <Reveal delay={180} style={{ gridColumn: 'span 7' }}>
       <Card style={{ padding: 18, display: 'flex', flexDirection: 'column', height: 360 }}>
-        <SectionTitle right={<span className="flex items-center t-caption" style={{ gap: 6, color: 'var(--accent-cyan)' }}><StatusDot status="alive" size={6} /> LIVE</span>}>Live Activity Feed</SectionTitle>
+        <SectionTitle right={indicator}>Live Activity Feed</SectionTitle>
         <div className="flex-1" style={{ overflowY: 'auto', marginRight: -6, paddingRight: 6 }}>
-          {feedLogs.map((log, i) => (
+          {feedLogs.length === 0 ? (
+            <EmptyState icon="activity" title="No log activity yet" hint="Bridge events and training output stream here as they happen." />
+          ) : feedLogs.map((log, i) => (
             <div key={log.id} className="flex items-start" style={{ gap: 10, padding: '6px 4px', borderRadius: 6, background: i % 2 ? 'transparent' : 'rgba(255,255,255,0.012)' }}>
               <span className="t-caption mono" style={{ minWidth: 52 }}>{log.timestamp}</span>
-              <span className="t-caption mono" style={{ color: typeColors[log.type], minWidth: 50, fontWeight: 500 }}>[{log.type}]</span>
+              <span className="t-caption mono" style={{ color: typeColors[log.type] || 'var(--text-secondary)', minWidth: 50, fontWeight: 500 }}>[{log.type}]</span>
               <span className="t-body" style={{ lineHeight: 1.5 }}>{log.message}</span>
             </div>
           ))}
@@ -99,12 +119,18 @@ function ActivityFeed() {
   );
 }
 
-function ActiveAgents({ onOpen }) {
+function ActiveAgents({ onOpen, agents, agentsOnline }) {
+  const right = agentsOnline
+    ? <span className="t-caption">{agents.length} online</span>
+    : <OfflinePill />;
   return (
     <Reveal delay={210} style={{ gridColumn: 'span 5' }}>
       <Card style={{ padding: 18, height: 360, display: 'flex', flexDirection: 'column' }}>
-        <SectionTitle right={<span className="t-caption">{agents.length} online</span>}>Active Agents</SectionTitle>
+        <SectionTitle right={right}>Active Agents</SectionTitle>
         <div className="flex flex-col flex-1" style={{ gap: 9 }}>
+          {agents.length === 0 && (
+            <EmptyState icon="users" title="No agents spawned" hint="Spawn agents from the Bot Config tab to populate the village." />
+          )}
           {agents.map((a) => (
             <button key={a.id} onClick={() => onOpen(a.id)} className="agent-row flex items-center" style={{
               gap: 12, padding: 10, borderRadius: 10, textAlign: 'left', cursor: 'pointer', flex: 1,
@@ -126,7 +152,7 @@ function ActiveAgents({ onOpen }) {
   );
 }
 
-export default function Dashboard({ onOpenAgent }) {
+export default function Dashboard({ onOpenAgent, agents = [], agentsOnline = false }) {
   const [epochs, setEpochs] = useState(1247);
   const [worldTime, setWorldTime] = useState(14.53);
   useEffect(() => {
@@ -138,14 +164,14 @@ export default function Dashboard({ onOpenAgent }) {
 
   return (
     <div className="grid12">
-      <Metric icon="users" value={4} animated label="Active Agents" sub="+2 this session" trend="up" delay={0} />
-      <Metric icon="brain" value={epochs} animated label="Epochs Completed" sub="Batch 64 / 128" trend="neutral" delay={40} />
-      <Metric icon="database" value={8492} animated label="Memory Entries" sub="ChromaDB active" trend="neutral" delay={80} />
-      <Metric icon="clock" value={timeStr} label="World Time" sub="Day 1,247" trend="neutral" delay={120} />
+      <Metric icon="users" value={agents.length} animated label="Active Agents" sub={agentsOnline ? 'live roster' : 'sample data'} trend={agents.length ? 'up' : 'neutral'} delay={0} />
+      <Metric icon="brain" value={epochs} animated label="Epochs Completed" sub="sample · Batch 64 / 128" trend="neutral" delay={40} />
+      <Metric icon="database" value={8492} animated label="Memory Entries" sub="sample · ChromaDB" trend="neutral" delay={80} />
+      <Metric icon="clock" value={timeStr} label="World Time" sub="sample · Day 1,247" trend="neutral" delay={120} />
       <ActivityTimeline />
-      <RewardDistribution />
+      <RewardDistribution agents={agents} />
       <ActivityFeed />
-      <ActiveAgents onOpen={onOpenAgent} />
+      <ActiveAgents onOpen={onOpenAgent} agents={agents} agentsOnline={agentsOnline} />
     </div>
   );
 }

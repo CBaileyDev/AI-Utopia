@@ -1,10 +1,10 @@
 /* AI Utopia — Spectate tab */
 import { useState, useRef, useEffect } from 'react';
-import { Card, Reveal, SectionTitle, Avatar, RoleBadge, StatusDot } from '../components/primitives.jsx';
+import { Card, Reveal, SectionTitle, Avatar, RoleBadge, StatusDot, EmptyState } from '../components/primitives.jsx';
 import { Icon } from '../lib/icons.jsx';
-import { agents, getRoleColor } from '../mockData.js';
+import { getRoleColor } from '../mockData.js';
 
-function WorldViewport() {
+function WorldViewport({ agents }) {
   const ref = useRef(null);
   const posRef = useRef(agents.map((a, i) => ({
     role: a.role, name: a.name,
@@ -105,7 +105,7 @@ function Inspector({ agent }) {
         <div style={{ minHeight: 270, maxHeight: 290, overflow: 'auto' }} className="tab-fade" key={tab}>
           {tab === 'state' && (
             <div className="soft mono" style={{ padding: 14, fontSize: 10.5, lineHeight: 1.9, color: 'var(--text-secondary)' }}>
-              {[['position', '(142, 64, -89)'], ['health', `${agent.health.toFixed(1)}/20.0`], ['hunger', `${agent.hunger.toFixed(1)}/20.0`]].map(([k, v]) => (
+              {[['position', `(${agent.x}, ${agent.z})`], ['health', `${(agent.health ?? 20).toFixed(1)}/20.0`], ['hunger', `${(agent.hunger ?? 20).toFixed(1)}/20.0`]].map(([k, v]) => (
                 <div key={k}><span style={{ color: 'var(--text-tertiary)' }}>{k}:</span> {v}</div>
               ))}
               <div><span style={{ color: 'var(--text-tertiary)' }}>inventory:</span></div>
@@ -147,7 +147,7 @@ function Inspector({ agent }) {
   );
 }
 
-function Chat({ agent, setAgent }) {
+function Chat({ agent, setAgent, agents }) {
   const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
@@ -223,13 +223,30 @@ function Chat({ agent, setAgent }) {
   );
 }
 
-export default function Spectate({ selectedAgentId, setSelectedAgentId }) {
-  const agent = agents.find((a) => a.id === selectedAgentId) || agents[0];
+export default function Spectate({ selectedAgentId, setSelectedAgentId, agents = [], agentsOnline = false }) {
+  if (agents.length === 0) {
+    return (
+      <div className="grid12">
+        <Reveal style={{ gridColumn: '1 / -1' }}>
+          <Card style={{ padding: 40, display: 'flex', flexDirection: 'column' }}>
+            <EmptyState
+              icon="map"
+              title={agentsOnline ? 'No agents to observe' : 'Bridge offline'}
+              hint={agentsOnline
+                ? 'Spawn agents from the Bot Config tab to watch them live in the world view.'
+                : 'The world view streams live agent positions once the bridge is reachable.'}
+            />
+          </Card>
+        </Reveal>
+      </div>
+    );
+  }
+  const agent = agents.find((a) => a.id === selectedAgentId || a.uuid === selectedAgentId) || agents[0];
   return (
     <div className="grid12">
-      <WorldViewport />
+      <WorldViewport agents={agents} />
       <Inspector agent={agent} />
-      <Chat agent={agent} setAgent={setSelectedAgentId} />
+      <Chat agent={agent} setAgent={setSelectedAgentId} agents={agents} />
     </div>
   );
 }

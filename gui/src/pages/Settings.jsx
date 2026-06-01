@@ -1,9 +1,12 @@
 /* AI Utopia — Settings tab */
-import { useState } from 'react';
-import { Card, Reveal, Toggle, Slider, Field, GhostButton } from '../components/primitives.jsx';
+import { useState, useEffect } from 'react';
+import { Card, Reveal, Toggle, Slider, Field, GhostButton, Skeleton, OfflinePill, EmptyState, Toasts } from '../components/primitives.jsx';
 import { Icon } from '../lib/icons.jsx';
+import { useResource } from '../useApi.js';
+import { getRewards, putRewards } from '../api.js';
+import { getRoleColor } from '../mockData.js';
 
-const subtabs = [['system', 'System', 'server'], ['environment', 'Environment', 'globe'], ['memory', 'Memory', 'database'], ['advanced', 'Advanced', 'cpu']];
+const subtabs = [['system', 'System', 'server'], ['environment', 'Environment', 'globe'], ['rewards', 'Rewards', 'trophy'], ['memory', 'Memory', 'database'], ['advanced', 'Advanced', 'cpu']];
 
 function SystemTab() {
   const ro = { color: 'var(--text-tertiary)' };
@@ -103,7 +106,123 @@ function AdvancedTab() {
   );
 }
 
-const content = { system: SystemTab, environment: EnvironmentTab, memory: MemoryTab, advanced: AdvancedTab };
+let _rToastId = 0;
+
+// Live reward-config editor — GET /api/rewards populates; Save -> PUT /api/rewards.
+function RewardsTab() {
+  const { data: rewards, loading, online, error } = useResource(getRewards, { fallback: null });
+  const [draft, setDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [toasts, setToasts] = useState([]);
+
+  // Seed the editable draft once the config arrives (deep copy so edits are local).
+  useEffect(() => {
+    if (rewards && !draft) setDraft(JSON.parse(JSON.stringify(rewards)));
+  }, [rewards, draft]);
+
+  const pushToast = (kind, message) => {
+    const id = ++_rToastId;
+    setToasts((t) => [...t, { id, kind, message }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 5000);
+  };
+  const dismiss = (id) => setToasts((t) => t.filter((x) => x.id !== id));
+
+  if (loading && !draft) {
+    return (
+      <div className="flex flex-col" style={{ gap: 10, maxWidth: 620 }}>
+        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} height={34} radius={8} />)}
+      </div>
+    );
+  }
+  if (!online || !draft) {
+    return <EmptyState icon="trophy" title="Rewards unavailable" hint={error ? 'Backend unreachable — reward config is read/written live from the bridge.' : 'No reward config returned.'} />;
+  }
+
+  const setLogValue = (item, v) => setDraft((d) => ({ ...d, log_value: { ...d.log_value, [item]: v } }));
+  const setPbrs = (k, v) => setDraft((d) => ({ ...d, pbrs: { ...d.pbrs, [k]: v } }));
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const res = await putRewards(draft);
+      pushToast('success', res?.saved_path ? `Saved · ${res.saved_path.split(/[\\/]/).pop()}` : 'Reward config saved');
+    } catch (e) {
+      pushToast('error', e.detail ? `Save failed: ${e.detail}` : 'Save failed — backend unreachable');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const logItems = Object.entries(draft.log_value || {});
+  const roleItems = draft.role_task_items || {};
+
+  return (
+    <div>
+      <div className="flex items-center justify-between" style={{ marginBottom: 18 }}>
+        <span className="t-section">Reward Configuration</span>
+        {online ? <span className="t-caption">live · env config file</span> : <OfflinePill />}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 40 }}>
+        {/* PBRS / penalties */}
+        <div>
+          <label className="t-label" style={{ display: 'block', marginBottom: 12 }}>Potential-Based Shaping</label>
+          <Field label="Gamma" description="Discount factor">
+            <div style={{ width: 170 }}>
+              <Slider value={draft.pbrs?.gamma ?? 0.99} min={0.9} max={0.999} step={0.001} onChange={(v) => setPbrs('gamma', v)} format={(v) => v.toFixed(3)} />
+            </div>
+          </Field>
+          <Field label="Time Penalty" description="Per-step penalty">
+            <input type="number" step="0.0001" className="inp" style={{ width: 110 }}
+              value={draft.pbrs?.time_penalty ?? 0} onChange={(e) => setPbrs('time_penalty', parseFloat(e.target.value))} />
+          </Field>
+          <Field label="Death Penalty" description="On agent death">
+            <input type="number" step="0.5" className="inp" style={{ width: 110 }}
+              value={draft.pbrs?.death_penalty ?? 0} onChange={(e) => setPbrs('death_penalty', parseFloat(e.target.value))} />
+          </Field>
+
+          <div style={{ marginTop: 16 }}>
+            <label className="t-label" style={{ display: 'block', marginBottom: 9 }}>Role Task Items</label>
+            <div className="flex flex-col" style={{ gap: 6 }}>
+              {Object.entries(roleItems).map(([role, items]) => (
+                <div key={role} className="soft flex items-center justify-between" style={{ padding: '9px 12px' }}>
+                  <span className="t-body capitalize" style={{ color: getRoleColor(role), fontSize: 11.5 }}>{role}</span>
+                  <span className="t-caption mono">{(items || []).join(', ') || '—'}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* LOG_VALUE item table */}
+        <div>
+          <label className="t-label" style={{ display: 'block', marginBottom: 12 }}>Item Values ({logItems.length})</label>
+          <div className="flex flex-col" style={{ gap: 5, maxHeight: 360, overflow: 'auto', paddingRight: 6 }}>
+            {logItems.map(([item, val]) => (
+              <div key={item} className="flex items-center justify-between" style={{ padding: '4px 2px' }}>
+                <span className="t-body mono" style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{item}</span>
+                <input type="number" step="0.05" className="inp mono" style={{ width: 92, height: 30, fontSize: 11 }}
+                  value={val} onChange={(e) => setLogValue(item, parseFloat(e.target.value))} />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center" style={{ gap: 12, marginTop: 20, paddingTop: 18, borderTop: '1px solid var(--border-subtle)' }}>
+        <GhostButton color="var(--accent-cyan)" icon={saving ? 'loader' : 'save'} onClick={save}>
+          {saving ? 'Saving…' : 'Save Rewards'}
+        </GhostButton>
+        <GhostButton color="var(--border-active)" style={{ color: 'var(--text-primary)' }} icon="minus"
+          onClick={() => setDraft(JSON.parse(JSON.stringify(rewards)))}>Revert</GhostButton>
+        <span className="t-caption">Writes the config file the env loads on next reset.</span>
+      </div>
+      <Toasts items={toasts} onDismiss={dismiss} />
+    </div>
+  );
+}
+
+const content = { system: SystemTab, environment: EnvironmentTab, rewards: RewardsTab, memory: MemoryTab, advanced: AdvancedTab };
 
 export default function Settings() {
   const [tab, setTab] = useState('system');

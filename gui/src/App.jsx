@@ -4,6 +4,10 @@ import { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { Icon } from './lib/icons.jsx';
 import { winMinimize, winToggleMaximize, winClose } from './lib/tauri.js';
 import { StatusDot } from './components/primitives.jsx';
+import { useResource } from './useApi.js';
+import { getHealth, getTrainingStatus, getAgents } from './api.js';
+import { adaptAgents } from './lib/transforms.js';
+import { agents as MOCK_AGENTS } from './mockData.js';
 import Dashboard from './pages/Dashboard.jsx';
 import BotConfig from './pages/BotConfig.jsx';
 import Training from './pages/Training.jsx';
@@ -19,9 +23,9 @@ const TABS = [
 ];
 
 const SUBTITLES = {
-  dashboard: 'Village Overview · 4 Agents Active',
+  dashboard: 'Village Overview',
   botconfig: 'Agent Management · Spawn & Configure',
-  training: 'RL Pipeline · Epoch 1,247',
+  training: 'RL Pipeline',
   spectate: 'Live World View · Agent Observation',
   settings: 'System Configuration',
 };
@@ -58,17 +62,34 @@ function TabBar({ active, setActive }) {
   );
 }
 
+// Stable empty-ish fallbacks so offline never crashes the shell.
+const HEALTH_FALLBACK = { bridge: 'offline', py4j_port: 25100, instances: 0, mc_version: '1.21.1' };
+const STATUS_FALLBACK = { running: false, iter: 0, max_iters: 0 };
+
 export default function App() {
   const [active, setActive] = useState('dashboard');
-  const [selectedAgentId, setSelectedAgentId] = useState('1');
+  const [selectedAgentId, setSelectedAgentId] = useState(null);
+
+  // Shell-wide live signals. Health drives the titlebar pill + statusbar dot;
+  // training status drives the statusbar spinner + iter counter. Polled slowly
+  // here on every tab; the Training tab re-polls status faster while it's open.
+  const { data: health, online } = useResource(getHealth, { fallback: HEALTH_FALLBACK, pollMs: 5000 });
+  const { data: tstatus } = useResource(getTrainingStatus, { fallback: STATUS_FALLBACK, pollMs: 5000 });
+  // Shared agent roster — one source for Dashboard / Bot Config / Spectate.
+  // online===true + [] is a real empty village; offline serves MOCK_AGENTS.
+  const agentsRes = useResource(getAgents, { fallback: MOCK_AGENTS, transform: adaptAgents, pollMs: 6000 });
+  const { data: agents, online: agentsOnline } = agentsRes;
+
+  const bridgeOnline = online && health?.bridge === 'online';
+  const training = !!tstatus?.running;
 
   const openAgent = (id) => { setSelectedAgentId(id); setActive('spectate'); };
 
   const pages = {
-    dashboard: <Dashboard onOpenAgent={openAgent} />,
-    botconfig: <BotConfig />,
+    dashboard: <Dashboard onOpenAgent={openAgent} agents={agents} agentsOnline={agentsOnline} />,
+    botconfig: <BotConfig agents={agents} agentsOnline={agentsOnline} refetchAgents={agentsRes.refetch} />,
     training: <Training />,
-    spectate: <Spectate selectedAgentId={selectedAgentId} setSelectedAgentId={setSelectedAgentId} />,
+    spectate: <Spectate selectedAgentId={selectedAgentId} setSelectedAgentId={setSelectedAgentId} agents={agents} agentsOnline={agentsOnline} />,
     settings: <Settings />,
   };
 
@@ -93,9 +114,11 @@ export default function App() {
               onClick; just suppresses drag-start on these interactive children. */}
           <div className="win-ctrls" onMouseDown={(e) => e.stopPropagation()}>
             <div className="win-meta">
-              <div className="bridge-pill">
-                <StatusDot status="alive" size={6} />
-                <span className="lbl">BRIDGE ONLINE</span>
+              <div className="bridge-pill" title={bridgeOnline ? `Py4J ${health.py4j_port} · ${health.instances} instance${health.instances === 1 ? '' : 's'}` : 'Backend unreachable — showing sample data'}>
+                <StatusDot status={bridgeOnline ? 'alive' : 'offline'} size={6} />
+                <span className="lbl" style={bridgeOnline ? undefined : { color: 'var(--status-offline)' }}>
+                  {bridgeOnline ? 'BRIDGE ONLINE' : 'BRIDGE OFFLINE'}
+                </span>
               </div>
               <Clock />
             </div>
@@ -114,7 +137,10 @@ export default function App() {
             <div className="flex items-end justify-between" style={{ marginBottom: 22 }}>
               <div>
                 <h1 className="t-hero">{TABS.find((t) => t.id === active).label}</h1>
-                <p className="t-caption" style={{ marginTop: 5, letterSpacing: '0.04em' }}>{SUBTITLES[active]}</p>
+                <p className="t-caption" style={{ marginTop: 5, letterSpacing: '0.04em' }}>
+                  {SUBTITLES[active]}
+                  {active === 'training' && training ? ` · iter ${tstatus?.iter ?? 0}/${tstatus?.max_iters ?? 0}` : ''}
+                </p>
               </div>
             </div>
             {/* key={active} remounts the page so the tab-fade animation replays on switch */}
@@ -122,15 +148,23 @@ export default function App() {
           </div>
         </div>
 
-        {/* Status bar */}
+        {/* Status bar — driven by live health + training status. */}
         <div className="statusbar">
-          <span className="si"><StatusDot status="alive" size={6} pulse={false} /> Py4J 25099</span>
-          <span className="si" style={{ color: 'var(--text-tertiary)' }}>v21 · iter 4/200</span>
-          <span className="si" style={{ color: 'var(--status-training)' }}><Icon name="loader" size={10} className="spin" /> training</span>
+          <span className="si"><StatusDot status={bridgeOnline ? 'alive' : 'offline'} size={6} pulse={false} /> Py4J {health?.py4j_port ?? '—'}</span>
+          {training ? (
+            <span className="si" style={{ color: 'var(--text-tertiary)' }}>
+              {tstatus?.run_id ? `${tstatus.run_id} · ` : ''}iter {tstatus?.iter ?? 0}/{tstatus?.max_iters ?? 0}
+            </span>
+          ) : (
+            <span className="si" style={{ color: 'var(--text-tertiary)' }}>idle</span>
+          )}
+          {training && (
+            <span className="si" style={{ color: 'var(--status-training)' }}><Icon name="loader" size={10} className="spin" /> training</span>
+          )}
           <span className="spacer" />
-          <span className="si">RTX 4080 · 84% idle</span>
-          <span className="si">MC 1.21.1 · Fabric</span>
-          <span className="si" style={{ color: 'var(--accent-cyan)' }}>● 4 instances</span>
+          {!bridgeOnline && <span className="si" style={{ color: 'var(--status-offline)' }}>sample data</span>}
+          <span className="si">MC {health?.mc_version ?? '1.21.1'} · Fabric</span>
+          <span className="si" style={{ color: bridgeOnline ? 'var(--accent-cyan)' : 'var(--text-tertiary)' }}>● {health?.instances ?? 0} instance{health?.instances === 1 ? '' : 's'}</span>
         </div>
       </div>
     </div>

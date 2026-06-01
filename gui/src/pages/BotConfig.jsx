@@ -1,13 +1,19 @@
 /* AI Utopia — Bot Config tab */
 import { useState } from 'react';
-import { Card, Reveal, SectionTitle, Toggle, Slider, Avatar, RoleBadge, StatusDot, GhostButton } from '../components/primitives.jsx';
+import { Card, Reveal, SectionTitle, Toggle, Slider, Avatar, RoleBadge, StatusDot, GhostButton, EmptyState, OfflinePill, Toasts } from '../components/primitives.jsx';
 import { Icon } from '../lib/icons.jsx';
-import { agents, roleMeta, getRoleColor } from '../mockData.js';
+import { roleMeta, getRoleColor } from '../mockData.js';
+import { spawnAgent, killAgent } from '../api.js';
 
 const roles = Object.keys(roleMeta);
 
-function SpawnController({ selected, setSelected }) {
+function SpawnController({ selected, setSelected, onSpawn, busy }) {
   const [name, setName] = useState('');
+  const submit = async () => {
+    if (busy) return;
+    await onSpawn(selected, name.trim() || undefined);
+    setName('');
+  };
   return (
     <Reveal style={{ gridColumn: '1 / -1' }}>
       <Card elevated className="card-hover" style={{ padding: 18 }}>
@@ -30,15 +36,18 @@ function SpawnController({ selected, setSelected }) {
               );
             })}
           </div>
-          <input className="inp" style={{ width: 200 }} placeholder="Auto-generate from pool" value={name} onChange={(e) => setName(e.target.value)} />
-          <button className="fill-btn" style={{ background: getRoleColor(selected), boxShadow: `0 0 0 0` }}
+          <input className="inp" style={{ width: 200 }} placeholder="Auto-generate from pool" value={name}
+            onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submit()} />
+          <button className="fill-btn" onClick={submit} disabled={busy}
+            style={{ background: getRoleColor(selected), boxShadow: `0 0 0 0`, opacity: busy ? 0.6 : 1, cursor: busy ? 'wait' : 'pointer' }}
             onMouseEnter={(e) => e.currentTarget.style.boxShadow = `0 0 22px ${getRoleColor(selected)}40`}
             onMouseLeave={(e) => e.currentTarget.style.boxShadow = 'none'}>
-            <Icon name="sparkles" size={13} /> Spawn
+            <Icon name={busy ? 'loader' : 'sparkles'} size={13} className={busy ? 'spin' : ''} /> {busy ? 'Spawning…' : 'Spawn'}
           </button>
         </div>
         <p className="t-caption" style={{ marginTop: 14, maxWidth: 620 }}>
           Agents receive a persistent ULID identity, skin, episodic-memory collection, and ChromaDB indexes on spawn.
+          Spawning requires a live Minecraft server on the bridge.
         </p>
       </Card>
     </Reveal>
@@ -102,10 +111,27 @@ function ParamsForm({ role }) {
   );
 }
 
-function IdentityPreview({ agent }) {
+function fmtBorn(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    return `${d.toISOString().slice(0, 10)} ${d.toLocaleTimeString('en-US', { hour12: false }).slice(0, 5)}`;
+  } catch { return String(iso); }
+}
+
+function IdentityPreview({ agent, onKill, killing }) {
+  if (!agent) {
+    return (
+      <Reveal delay={120} style={{ gridColumn: 'span 5' }}>
+        <Card style={{ padding: 22, height: '100%', display: 'flex', flexDirection: 'column' }}>
+          <EmptyState icon="cpu" title="No agent selected" hint="Spawn an agent or pick one from the roster to inspect its identity." />
+        </Card>
+      </Reveal>
+    );
+  }
   const stats = [
-    ['Born', '2026-05-26 14:23'], ['Status', agent.status.toUpperCase()],
-    ['Skin', agent.skin], ['Memory', '2 collections'],
+    ['Born', fmtBorn(agent.born)], ['Status', agent.status.toUpperCase()],
+    ['Skin', agent.skin], ['Position', `(${agent.x}, ${agent.z})`],
   ];
   return (
     <Reveal delay={120} style={{ gridColumn: 'span 5' }}>
@@ -126,7 +152,9 @@ function IdentityPreview({ agent }) {
             ))}
           </div>
           <div className="flex items-center full" style={{ gap: 10, marginTop: 16 }}>
-            <GhostButton color="var(--status-offline)" icon="userX" full>Terminate</GhostButton>
+            <GhostButton color="var(--status-offline)" icon={killing ? 'loader' : 'userX'} full onClick={() => onKill(agent)}>
+              {killing ? 'Terminating…' : 'Terminate'}
+            </GhostButton>
             <GhostButton color="var(--accent-cyan)" icon="brain" full>Inspect Memory</GhostButton>
           </div>
         </div>
@@ -135,14 +163,108 @@ function IdentityPreview({ agent }) {
   );
 }
 
-export default function BotConfig() {
+// Live roster — lets the operator pick which real agent to inspect / terminate.
+function Roster({ agents, agentsOnline, selectedUuid, onSelect }) {
+  return (
+    <Reveal delay={60} style={{ gridColumn: '1 / -1' }}>
+      <Card style={{ padding: 18 }}>
+        <SectionTitle right={agentsOnline ? <span className="t-caption">{agents.length} agent{agents.length === 1 ? '' : 's'}</span> : <OfflinePill />}>
+          Agent Roster
+        </SectionTitle>
+        {agents.length === 0 ? (
+          <EmptyState icon="users" title="No agents in the village" hint="Use Spawn Agent above to create your first agent. Spawning needs a live Minecraft server." />
+        ) : (
+          <div className="flex wrap" style={{ gap: 9 }}>
+            {agents.map((a) => {
+              const on = a.uuid === selectedUuid;
+              const c = getRoleColor(a.role);
+              return (
+                <button key={a.uuid || a.id} onClick={() => onSelect(a)} className="flex items-center" style={{
+                  gap: 10, padding: '9px 13px', borderRadius: 10, cursor: 'pointer', textAlign: 'left',
+                  background: on ? `${c}12` : 'var(--surface-2)', border: `1px solid ${on ? `${c}55` : 'var(--border-subtle)'}`,
+                  transition: 'all 0.2s var(--ease)',
+                }}>
+                  <Avatar role={a.role} name={a.name} size={30} ring={false} />
+                  <div>
+                    <div className="t-body" style={{ color: 'var(--text-primary)', fontWeight: 500, fontSize: 12 }}>{a.name}</div>
+                    <div className="t-caption capitalize">{a.role} · {a.status}</div>
+                  </div>
+                  <StatusDot status={a.status} size={6} />
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+    </Reveal>
+  );
+}
+
+let _toastId = 0;
+
+export default function BotConfig({ agents = [], agentsOnline = false, refetchAgents }) {
   const [selected, setSelected] = useState('gatherer');
-  const previewAgent = agents.find((a) => a.role === selected) || agents[0];
+  const [selectedUuid, setSelectedUuid] = useState(null);
+  const [spawning, setSpawning] = useState(false);
+  const [killingUuid, setKillingUuid] = useState(null);
+  const [toasts, setToasts] = useState([]);
+
+  const pushToast = (kind, message) => {
+    const id = ++_toastId;
+    setToasts((t) => [...t, { id, kind, message }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 5000);
+  };
+  const dismiss = (id) => setToasts((t) => t.filter((x) => x.id !== id));
+
+  // Resolve the agent shown in the identity card: explicit selection, else the
+  // first matching the chosen role, else the first agent (may be undefined → empty state).
+  const previewAgent =
+    agents.find((a) => a.uuid === selectedUuid) ||
+    agents.find((a) => a.role === selected) ||
+    agents[0] ||
+    null;
+
+  const handleSpawn = async (role, name) => {
+    setSpawning(true);
+    try {
+      const res = await spawnAgent(role, name);
+      if (res && res.ok === false) {
+        pushToast('error', `Spawn failed: ${res.error || 'unknown error'}`);
+      } else {
+        const a = res && res.agent;
+        pushToast('success', `Spawned ${a?.name || name || role} (${role})`);
+        if (a?.uuid) setSelectedUuid(a.uuid);
+      }
+    } catch (e) {
+      pushToast('error', e.detail ? `Spawn failed: ${e.detail}` : `Spawn failed — backend unreachable`);
+    } finally {
+      setSpawning(false);
+      refetchAgents && refetchAgents();
+    }
+  };
+
+  const handleKill = async (agent) => {
+    if (!agent?.uuid) return;
+    setKillingUuid(agent.uuid);
+    try {
+      await killAgent(agent.uuid);
+      pushToast('success', `Terminated ${agent.name}`);
+      if (selectedUuid === agent.uuid) setSelectedUuid(null);
+    } catch (e) {
+      pushToast('error', e.detail ? `Terminate failed: ${e.detail}` : `Terminate failed — backend unreachable`);
+    } finally {
+      setKillingUuid(null);
+      refetchAgents && refetchAgents();
+    }
+  };
+
   return (
     <div className="grid12">
-      <SpawnController selected={selected} setSelected={setSelected} />
+      <SpawnController selected={selected} setSelected={setSelected} onSpawn={handleSpawn} busy={spawning} />
+      <Roster agents={agents} agentsOnline={agentsOnline} selectedUuid={previewAgent?.uuid} onSelect={(a) => setSelectedUuid(a.uuid)} />
       <ParamsForm role={selected} />
-      <IdentityPreview agent={previewAgent} />
+      <IdentityPreview agent={previewAgent} onKill={handleKill} killing={!!previewAgent && killingUuid === previewAgent.uuid} />
+      <Toasts items={toasts} onDismiss={dismiss} />
     </div>
   );
 }

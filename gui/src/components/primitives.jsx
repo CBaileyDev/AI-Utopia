@@ -163,6 +163,55 @@ export function AnimatedNumber({ value, decimals = 0, prefix = '', suffix = '', 
   return <span>{prefix}{display.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}{suffix}</span>;
 }
 
+/* ---------------------------------------------------------------------------
+ * Data-state primitives — used by the wired pages to show loading / empty /
+ * offline states that look intentional and on-brand rather than raw spinners.
+ * ------------------------------------------------------------------------- */
+
+// Small unobtrusive pill shown when the backend is unreachable and a view is
+// rendering mock data. Reuses the brand pill look in muted offline-red.
+export function OfflinePill({ label = 'BRIDGE OFFLINE · sample data', style = {} }) {
+  return (
+    <span className="offline-pill" style={style}>
+      <span className="offline-pill-dot" />
+      <span>{label}</span>
+    </span>
+  );
+}
+
+// Skeleton shimmer block — sized by the caller, rounded, subtle.
+export function Skeleton({ width = '100%', height = 14, radius = 6, style = {} }) {
+  return <span className="skel" style={{ width, height, borderRadius: radius, ...style }} />;
+}
+
+// Centered, low-key empty state for "online but nothing to show yet".
+export function EmptyState({ icon, title, hint, action }) {
+  return (
+    <div className="empty-state">
+      {icon && <Icon name={icon} size={26} style={{ color: 'var(--text-tertiary)' }} />}
+      <div className="t-body" style={{ color: 'var(--text-secondary)', marginTop: icon ? 10 : 0 }}>{title}</div>
+      {hint && <div className="t-caption" style={{ marginTop: 5, maxWidth: 300, textAlign: 'center' }}>{hint}</div>}
+      {action && <div style={{ marginTop: 14 }}>{action}</div>}
+    </div>
+  );
+}
+
+// Toast stack — render <Toasts items={...} /> once; push via a small reducer in
+// the page. Auto-dismiss is handled by the page (keeps this primitive dumb).
+export function Toasts({ items = [], onDismiss }) {
+  if (!items.length) return null;
+  return (
+    <div className="toast-stack">
+      {items.map((t) => (
+        <div key={t.id} className={`toast toast-${t.kind || 'info'}`} onClick={() => onDismiss && onDismiss(t.id)}>
+          <Icon name={t.kind === 'error' ? 'alert' : t.kind === 'success' ? 'check' : 'activity'} size={13} />
+          <span className="t-body" style={{ fontSize: 11.5 }}>{t.message}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function Field({ label, description, children, full }) {
   return (
     <div style={{ padding: '12px 0', ...(full ? { gridColumn: '1 / -1' } : {}) }}>
