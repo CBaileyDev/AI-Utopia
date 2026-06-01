@@ -106,13 +106,12 @@ def apply_skill_mask(adi, skill_mask):
 
 
 def actions_to_numpy_for_env(act):
-    """Convert the sampled action dict to numpy for vec_sim.step, clipping the
-    bounded Box children to their declared ranges -- matching the eval gate
-    (scenario_runner._greedy_decode). We clip a COPY for the env only; the RAW
-    sampled action is stored in the buffer so the PPO logp is recomputed on the
-    same raw value at update time (standard practice; keeps the ratio exact).
-    Unbounded raw Gaussian spatial_param otherwise walks the agent out of the
-    arena box in a handful of steps (OOB truncation).
+    """Convert the sampled action dict to numpy for vec_sim.step.
+
+    Clips the bounded Box children (scalar/spatial/comm) to their declared ranges
+    for the env ONLY (matching scenario_runner._greedy_decode); the RAW sampled
+    action stays in the buffer so the PPO logp is recomputed on the same value
+    (keeps the ratio exact). Unbounded raw spatial_param otherwise walks OOB fast.
     """
     out = {}
     for k, v in act.items():
@@ -123,6 +122,57 @@ def actions_to_numpy_for_env(act):
             arr = np.clip(arr, -1.0, 1.0)
         out[k] = arr
     return out
+
+
+def seed1_navigate_probe(mod, device) -> str:
+    """seed_1 masked-spawn skill-type logits (the supervised leading indicator).
+
+    Clean seed_1 scenario reset (no curriculum); reads RAW skill_type logits and
+    reports the NAVIGATE(0) logit + rank vs SEARCH(3)/HARVEST(1). Ranks on RAW
+    logits (masking HARVEST would make the rank trivial).
+    """
+    import torch  # noqa: PLC0415
+    from ray.rllib.core import Columns  # noqa: PLC0415
+
+    from aiutopia.sim.sim_env import AiUtopiaSimEnv  # noqa: PLC0415
+    from aiutopia.train.scenario_runner import M1_SCENARIOS  # noqa: PLC0415
+
+    sc = next(s for s in M1_SCENARIOS if s.seed == 1)
+    env = AiUtopiaSimEnv(
+        {"active_roles": ["gatherer"], "backend": "sim", "max_episode_ticks": sc.max_ticks}
+    )
+    try:
+        obs, _ = env.reset(seed=sc.seed)
+        agent_obs = obs["gatherer_0"]
+
+        def _batch(v):
+            if isinstance(v, dict):
+                return {k: _batch(vv) for k, vv in v.items()}
+            return torch.as_tensor(np.asarray(v)).unsqueeze(0).to(device)
+
+        state = mod.get_initial_state()
+        state_in = {k: v.to(device).unsqueeze(0) for k, v in state.items()}
+        with torch.no_grad():
+            out = mod._forward_inference(
+                {
+                    Columns.OBS: {k: _batch(v) for k, v in agent_obs.items()},
+                    Columns.STATE_IN: state_in,
+                }
+            )
+        s, e = SKILL_SLICE
+        logits = out[Columns.ACTION_DIST_INPUTS][0, s:e].detach().cpu().numpy()
+        names = ["NAVIGATE", "HARVEST", "DEPOSIT", "SEARCH", "WAIT", "NOOP"]
+        order = np.argsort(-logits)  # descending
+        nav_rank = int(np.where(order == 0)[0][0]) + 1  # 1 == top
+        masked = int(np.asarray(agent_obs["action_mask"]["skill_type"]).reshape(-1)[1]) == 0
+        per = " ".join(f"{names[i]}={logits[i]:+.2f}" for i in range(len(logits)))
+        return (
+            f"seed1 NAVIGATE-logit: NAV={logits[0]:+.3f} (rank {nav_rank}/6) "
+            f"vs HARVEST={logits[1]:+.3f} SEARCH={logits[3]:+.3f} "
+            f"| harvest_masked={masked} | all[{per}]"
+        )
+    finally:
+        env.close()
 
 
 def main() -> None:  # noqa: PLR0912, PLR0915
@@ -139,10 +189,59 @@ def main() -> None:  # noqa: PLR0912, PLR0915
     ap.add_argument("--vf-coeff", type=float, default=0.5)
     ap.add_argument("--grad-clip", type=float, default=1.0)
     ap.add_argument("--max-ep-ticks", type=int, default=300)
-    ap.add_argument("--gate-check", action="store_true",
-                    help="run 3 M1 scenarios (mask-aware greedy) post-train")
-    ap.add_argument("--save-weights", type=str, default="",
-                    help="path to torch.save the trained module state_dict")
+    # --- PPO stability (clip-only diverges past peak; KL holds it) ---
+    ap.add_argument(
+        "--kl-coeff",
+        type=float,
+        default=0.0,
+        help="fixed KL-penalty coeff added to the loss (0 = off, current behavior)",
+    )
+    ap.add_argument(
+        "--target-kl",
+        type=float,
+        default=0.0,
+        help="if >0, ADAPTIVE KL: scale kl_coeff *1.5 if iter-mean KL>1.5x target, "
+        "/1.5 if <0.5x (RLlib-style). Needs --kl-coeff>0 as the starting value",
+    )
+    ap.add_argument(
+        "--anneal-ent",
+        action="store_true",
+        help="linearly decay ent-coeff from --ent-coeff to ~0 over --iters",
+    )
+    ap.add_argument(
+        "--lr-anneal",
+        choices=["off", "linear", "cosine"],
+        default="off",
+        help="decay lr from --lr to ~0 over --iters (off=constant, current behavior)",
+    )
+    # --- TRAINING-only curriculum (parity-gated; eval stays clean) ---
+    ap.add_argument(
+        "--spawn-jitter",
+        type=float,
+        default=0.0,
+        help="VecGathererSim spawn jitter (± blocks); >0 auto-enables randomize_layout",
+    )
+    ap.add_argument(
+        "--approach-shaping",
+        action="store_true",
+        help="VecGathererSim PBRS toward nearest log while HARVEST masked",
+    )
+    ap.add_argument(
+        "--force-masked-spawn",
+        action="store_true",
+        help="VecGathererSim: push agent out until HARVEST masked every episode",
+    )
+    ap.add_argument(
+        "--gate-check",
+        action="store_true",
+        help="run 3 M1 scenarios (mask-aware greedy) post-train",
+    )
+    ap.add_argument(
+        "--save-weights",
+        type=str,
+        default="",
+        help="path to torch.save the trained module state_dict",
+    )
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -153,9 +252,26 @@ def main() -> None:  # noqa: PLR0912, PLR0915
     mod = build_module(device)
     opt = torch.optim.Adam(mod.parameters(), lr=args.lr)
 
-    sim = VecGathererSim(num_envs=B, max_episode_ticks=args.max_ep_ticks)
+    # TRAINING-only curriculum (parity-gated in VecGathererSim; default off). Any
+    # curriculum flag implies randomize_layout (the scalar env gates all three on
+    # it); without that the knobs would be silent no-ops.
+    curriculum = args.spawn_jitter > 0.0 or args.approach_shaping or args.force_masked_spawn
+    sim = VecGathererSim(
+        num_envs=B,
+        max_episode_ticks=args.max_ep_ticks,
+        spawn_jitter=args.spawn_jitter,
+        approach_shaping=args.approach_shaping,
+        force_masked_spawn=args.force_masked_spawn,
+        randomize_layout=curriculum,
+    )
     seeds = np.arange(B, dtype=np.int64) + 1 + args.seed * B
     obs = sim.reset(seeds)
+
+    # KL-penalty controller state (fixed or adaptive). kl_coeff is mutable across
+    # iters when --target-kl>0 (RLlib-style adaptive). Defaults (0/0) reproduce the
+    # prior clip-only loss bit-for-bit (the kl term is multiplied by 0).
+    kl_coeff = float(args.kl_coeff)
+    base_lr = float(args.lr)
 
     init_state = mod.get_initial_state()
     hdim = init_state["h"].shape[0]
@@ -171,6 +287,18 @@ def main() -> None:  # noqa: PLR0912, PLR0915
     update_hist: list[float] = []
     for it in range(args.iters):
         t_iter0 = time.perf_counter()
+        # Per-iter schedules (all OFF by default -> constant, prior behavior).
+        frac = it / max(1, args.iters - 1)  # 0..1 across the run
+        ent_coeff = args.ent_coeff * (1.0 - frac) if args.anneal_ent else args.ent_coeff
+        if args.lr_anneal == "linear":
+            cur_lr = base_lr * (1.0 - frac)
+        elif args.lr_anneal == "cosine":
+            cur_lr = base_lr * 0.5 * (1.0 + np.cos(np.pi * frac))
+        else:
+            cur_lr = base_lr
+        if args.lr_anneal != "off":
+            for pg in opt.param_groups:
+                pg["lr"] = cur_lr
         buf_obs = []
         buf_act = []
         buf_logp = torch.zeros(T, B, device=device)
@@ -321,13 +449,18 @@ def main() -> None:  # noqa: PLR0912, PLR0915
                 mb_adv = adv_norm[:, mb].T
                 mb_ret = returns[:, mb].T
 
-                ratio = torch.exp(new_logp - old_logp)
+                logratio = new_logp - old_logp
+                ratio = torch.exp(logratio)
                 surr1 = ratio * mb_adv
                 surr2 = torch.clamp(ratio, 1 - args.clip, 1 + args.clip) * mb_adv
                 pg_loss = -torch.min(surr1, surr2).mean()
                 v_loss = 0.5 * (vf - mb_ret).pow(2).mean()
                 ent_loss = ent.mean()
-                loss = pg_loss + args.vf_coeff * v_loss - args.ent_coeff * ent_loss
+                # KL penalty (Schulman k3 estimator, GRAD-carrying so it actually
+                # pulls the new policy back toward the OLD collection policy). With
+                # kl_coeff=0 (default) this term is exactly 0 -> clip-only behavior.
+                kl_mb = ((ratio - 1.0) - logratio).mean()
+                loss = pg_loss + args.vf_coeff * v_loss - ent_coeff * ent_loss + kl_coeff * kl_mb
 
                 opt.zero_grad()
                 loss.backward()
@@ -368,21 +501,30 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         ent_m = float(np.mean(ents))
         kl_m = float(np.mean(kls))
         cf_m = float(np.mean(clipfracs))
+        kl_coeff_logged = kl_coeff
+        # ADAPTIVE KL (RLlib-style): nudge kl_coeff toward holding the iter-mean KL
+        # near --target-kl. Only active when target_kl>0; finite-KL guard so a NaN
+        # iter can't poison the controller. Logs the coeff USED this iter.
+        if args.target_kl > 0.0 and np.isfinite(kl_m):
+            if kl_m > 1.5 * args.target_kl:
+                kl_coeff *= 1.5
+            elif kl_m < 0.5 * args.target_kl:
+                kl_coeff /= 1.5
         print(
             f"iter {it:3d} | sps {sps:7.0f} | "
             f"collect {collect_time:5.2f}s update {update_time:5.2f}s | "
             f"ep_ret {ep_ret_mean:7.2f} (n={n_ep}) | "
             f"term_mean {term_mean:7.2f} (n_term={n_term}) term_rate {term_rate:.3f} | "
-            f"ent {ent_m:.3f} KL {kl_m:.4f} clipfrac {cf_m:.3f} | "
+            f"ent {ent_m:.3f} KL {kl_m:.4f} clipfrac {cf_m:.3f} kl_coeff {kl_coeff_logged:.4f} | "
             f"first_mb[KL {first_mb_kl:.5f} clipfrac {first_mb_clipfrac:.4f}] | "
             f"seq_cross {cross_frac:.2f}",
             flush=True,
         )
 
     warm = sps_hist[1:] if len(sps_hist) > 1 else sps_hist  # drop iter 0 (CUDA init)
-    med_sps = float(np.median(warm)) if warm else float('nan')
-    lo_sps = float(np.min(warm)) if warm else float('nan')
-    hi_sps = float(np.max(warm)) if warm else float('nan')
+    med_sps = float(np.median(warm)) if warm else float("nan")
+    lo_sps = float(np.min(warm)) if warm else float("nan")
+    hi_sps = float(np.max(warm)) if warm else float("nan")
     med_collect = float(np.median(collect_hist[1:] or collect_hist))
     med_update = float(np.median(update_hist[1:] or update_hist))
     print(
@@ -395,9 +537,10 @@ def main() -> None:  # noqa: PLR0912, PLR0915
 
     if args.save_weights:
         torch.save(mod.state_dict(), args.save_weights)
-        print(f'saved weights -> {args.save_weights}', flush=True)
+        print(f"saved weights -> {args.save_weights}", flush=True)
 
     if args.gate_check:
+        from aiutopia.env.reward import _inventory_from_obs  # noqa: PLC0415
         from aiutopia.train.scenario_runner import (  # noqa: PLC0415
             M1_SCENARIOS,
             aggregate_success_rate,
@@ -405,18 +548,32 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         )
 
         mod.eval()
+        # Supervised leading indicator: print the seed_1 NAVIGATE-logit line every
+        # run (the basin-escape signal precedes the gate flipping).
+        print(seed1_navigate_probe(mod, device), flush=True)
         gate_results = []
         for sc in M1_SCENARIOS:
             res = run_scenario(
                 sc,
-                env_config={'active_roles': ['gatherer'], 'backend': 'sim'},
+                # EVAL stays CLEAN: this env_config carries NO curriculum keys, so the
+                # eval env defaults spawn_jitter/approach_shaping/force_masked_spawn
+                # OFF and uses the FIXED scenario seed. Training-time curriculum cannot
+                # leak into the gate measurement.
+                env_config={"active_roles": ["gatherer"], "backend": "sim"},
                 rl_module=mod,
                 device=device,
             )
             gate_results.append(res)
-            print(f"  gate {res['name']}: success={res['success']}", flush=True)
+            # Per-seed oak count (not just success): the SAME _inventory_from_obs the
+            # gate predicate uses, over the final obs run_scenario returns.
+            final = res.get("final_inventory", {}).get("gatherer_0", {})
+            oak = _inventory_from_obs(final).get("oak_log", 0) if final else 0
+            print(
+                f"  gate {res['name']}: success={res['success']} oak={oak}",
+                flush=True,
+            )
         sr = aggregate_success_rate(gate_results)
-        print(f'M1 GATE success_rate (mask-aware greedy eval): {sr:.3f}', flush=True)
+        print(f"M1 GATE success_rate (mask-aware greedy eval): {sr:.3f}", flush=True)
 
 
 if __name__ == "__main__":

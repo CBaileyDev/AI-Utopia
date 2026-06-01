@@ -86,13 +86,41 @@ class VecGathererSim:
     Args:
         num_envs: number of parallel envs B.
         max_episode_ticks: per-episode tick (== env-step) budget for truncation.
+        spawn_jitter: TRAINING-only ± block displacement of the agent spawn.
+        approach_shaping: TRAINING-only PBRS toward nearest log while masked.
+        force_masked_spawn: TRAINING-only push agent out until HARVEST masked.
+        randomize_layout: gate for the three curriculum knobs above (training).
     """
 
-    def __init__(self, num_envs: int, max_episode_ticks: int = 300) -> None:
+    def __init__(
+        self,
+        num_envs: int,
+        max_episode_ticks: int = 300,
+        *,
+        spawn_jitter: float = 0.0,
+        approach_shaping: bool = False,
+        force_masked_spawn: bool = False,
+        randomize_layout: bool = False,
+    ) -> None:
+        """Build B parallel envs; see the class docstring for the args."""
         if num_envs < 1:
             raise ValueError("num_envs must be >= 1")
         self.num_envs = int(num_envs)
         self.max_episode_ticks = int(max_episode_ticks)
+        # TRAINING-only curriculum knobs (parity-faithful to scalar sim_env.py).
+        # All default OFF so the vanilla M1 gate path stays byte-identical (the
+        # test_vec_sim_parity.py contract). spawn_jitter + force_masked_spawn run
+        # the SCALAR arithmetic on the per-env SimWorld at reset/autoreset
+        # (parity-by-construction); only approach_shaping touches the per-step hot
+        # path (vectorized below). Like the scalar env, every knob is gated on
+        # randomize_layout (training); fixed-seed eval never jitters/masks/shapes.
+        self._spawn_jitter = float(spawn_jitter)
+        self._approach_shaping = bool(approach_shaping)
+        self._force_masked_spawn = bool(force_masked_spawn)
+        self._randomize_layout = bool(randomize_layout)
+        # Separate prev-potential store for approach_shaping (mirrors scalar
+        # _prev_phi_approach). Seeded at reset, telescoped per step while masked.
+        self._prev_phi_approach = np.zeros(self.num_envs, dtype=np.float64)
         # BATCHED-ARRAY STATE (replaces a list of B scalar SimWorld objects).
         # All hot-path reads/writes hit these contiguous arrays directly -- no
         # per-step np.stack over python objects, no per-env list-comprehensions.
@@ -211,6 +239,67 @@ class VecGathererSim:
             "should_broadcast": np.ones((B, 2), dtype=np.int8),
         }
 
+    def _apply_spawn_curriculum(self, w: SimWorld, seed: int) -> None:
+        """Apply TRAINING-only spawn jitter + force_masked_spawn to a SimWorld.
+
+        Runs the EXACT scalar AiUtopiaSimEnv.reset arithmetic on ``w`` so it is
+        parity-by-construction (bit-identical to the scalar path, not fuzz-equal).
+        No-op unless ``randomize_layout`` AND the relevant knob is set. Mutates only
+        ``w.agent_pos``.
+        """
+        if not self._randomize_layout:
+            return
+        import math  # noqa: PLC0415
+
+        from aiutopia.sim.obs_adapter import (  # noqa: PLC0415
+            REACH_RADIUS_BLOCKS,
+            gatherer_nearest_columns,
+        )
+
+        half = _ARENA_HALF
+        # spawn_jitter: seeded per-env horizontal displacement, clamped to arena.
+        if self._spawn_jitter > 0.0:
+            jr = np.random.default_rng(seed * 2654435761 & 0xFFFFFFFF)
+            off = jr.uniform(-self._spawn_jitter, self._spawn_jitter, size=2)
+            w.agent_pos[0] = float(
+                np.clip(
+                    w.agent_pos[0] + off[0],
+                    _ARENA_CENTER_X - half,
+                    _ARENA_CENTER_X + half,
+                )
+            )
+            w.agent_pos[2] = float(
+                np.clip(
+                    w.agent_pos[2] + off[1],
+                    _ARENA_CENTER_Z - half,
+                    _ARENA_CENTER_Z + half,
+                )
+            )
+        # force_masked_spawn: push the agent outward from the nearest perceived
+        # trunk until its topmost log is out of reach (HARVEST masked), capped iters.
+        if self._force_masked_spawn:
+            for _ in range(40):
+                _ct, nb = gatherer_nearest_columns(w)
+                if not nb or math.sqrt(nb[0][5]) > REACH_RADIUS_BLOCKS:
+                    break  # already masked (or nothing in perception)
+                dx0 = nb[0][2]
+                dz0 = nb[0][4]
+                nrm = math.hypot(dx0, dz0) or 1.0
+                w.agent_pos[0] = float(
+                    np.clip(
+                        w.agent_pos[0] - dx0 / nrm,
+                        _ARENA_CENTER_X - half,
+                        _ARENA_CENTER_X + half,
+                    )
+                )
+                w.agent_pos[2] = float(
+                    np.clip(
+                        w.agent_pos[2] - dz0 / nrm,
+                        _ARENA_CENTER_Z - half,
+                        _ARENA_CENTER_Z + half,
+                    )
+                )
+
     def reset(self, seeds) -> dict:
         """Reset all envs to the given per-env seeds; return the batched obs dict.
 
@@ -227,6 +316,10 @@ class VecGathererSim:
         worlds = [SimWorld() for _ in range(self.num_envs)]
         for i, w in enumerate(worlds):
             w.reset(int(seeds[i]), arena_mode="trees")
+            # TRAINING-only spawn curriculum: run the SCALAR jitter / force-mask
+            # arithmetic on this per-env SimWorld (parity-by-construction). No-op
+            # unless randomize_layout AND the relevant knob is set.
+            self._apply_spawn_curriculum(w, int(seeds[i]))
         n = worlds[0].logs.shape[0]
         # Uniform-n guard: batched logs (B,n,3) require equal n across envs. The
         # gate path is trees-only (n=64 always); a future mixed/cluster mode with a
@@ -248,7 +341,35 @@ class VecGathererSim:
         self._ep_len[:] = 0
         self.last_episode_return[:] = np.nan
         self.last_episode_length[:] = -1
+        # Seed the approach-shaping potential at the (post-curriculum) spawn so the
+        # first step's telescoping delta is measured from the spawn (mirrors scalar
+        # _prev_phi_approach = _log_potential(world) at the end of reset()).
+        self._prev_phi_approach = self._log_potential_batched()
         return self._build_obs()
+
+    def _log_potential_batched(self, idx: np.ndarray | None = None) -> np.ndarray:
+        """Vectorized scalar ``_log_potential`` (-0.1 * nearest alive-log dist).
+
+        Mirrors sim_env._log_potential EXACTLY (W=0.1, all alive logs, full 3D
+        distance to ``agent_pos``). NOT the perception/floored ``nearest_dist`` --
+        reusing that would be a parity bug. ``idx`` restricts to a row subset (for
+        autoreset re-seeding); None means all B rows.
+        """
+        if idx is None:
+            logs = self.logs
+            alive = self.log_alive
+            pos = self.agent_pos
+        else:
+            logs = self.logs[idx]
+            alive = self.log_alive[idx]
+            pos = self.agent_pos[idx]
+        d = logs.astype(np.float64) - pos[:, None, :]
+        dist = np.sqrt((d * d).sum(axis=2))
+        dist = np.where(alive, dist, np.inf)
+        min_dist = dist.min(axis=1)
+        # No alive log -> potential 0.0 (scalar returns 0.0 when none alive).
+        phi = np.where(np.isfinite(min_dist), -0.1 * min_dist, 0.0)
+        return phi.astype(np.float64)
 
     def step(self, actions):
         """Advance all envs one macro-step.
@@ -280,8 +401,14 @@ class VecGathererSim:
         # mutates the batched-state arrays in place (no SimWorld stack/scatter).
         # Returns the per-env clipped popcount (== bin(bitset).count("1")) directly.
         n_clipped = vec_apply_skills(
-            skill_type, target_class, spatial, scalar,
-            self.agent_pos, self.log_alive, self.logs, self.oak,
+            skill_type,
+            target_class,
+            spatial,
+            scalar,
+            self.agent_pos,
+            self.log_alive,
+            self.logs,
+            self.oak,
         )
         # 2. env-step counter (one tick per step; walk-ticks NOT counted).
         self.tick += 1
@@ -293,6 +420,17 @@ class VecGathererSim:
 
         # 4. Obs (vectorized) -- built EXACTLY ONCE per step.
         obs = self._build_obs()
+
+        # 4b. approach_shaping (TRAINING-only): PBRS distance-reduction toward the
+        # nearest alive log ONLY while HARVEST is masked. Mirrors scalar sim_env
+        # EXACTLY: phi_a = _log_potential(world) on the POST-step world; the masked
+        # gate is obs action_mask skill_type[1] == 0; add phi_a - prev ONLY when
+        # masked; UPDATE prev for ALL envs every step (telescoping). Off by default.
+        if self._approach_shaping:
+            phi_a = self._log_potential_batched()  # (B,) post-step potential
+            harvest_masked = obs["action_mask"]["skill_type"][:, _HARVEST] == 0
+            reward = reward + np.where(harvest_masked, phi_a - self._prev_phi_approach, 0.0)
+            self._prev_phi_approach[:] = phi_a
 
         # 5. Termination (goal) + truncation (tick budget OR OOB box).
         # Trap B: the OOB box test must use the float32 position (agent_pos cast to
@@ -353,12 +491,22 @@ class VecGathererSim:
         if m == 0:
             return
 
-        # Re-seed the done envs' state arrays from byte-faithful SimWorld arenas
-        # (same seed) -- the only place SimWorld is touched after reset().
+        # Re-seed the done envs' state arrays from byte-faithful SimWorld arenas.
+        # Under randomize_layout (training) the per-env seed is ADVANCED by num_envs
+        # so each env walks a DISJOINT seed stream -- the batched analog of the scalar
+        # env's global ``_train_ep`` increment per episode (documented divergence: the
+        # exact global-counter schedule across B parallel envs is not reproduced; the
+        # per-env streams are disjoint and cover the layout space). Default path
+        # (randomize_layout=False) keeps the same-seed re-seed (existing tests green).
         for i in idx:
             ii = int(i)
+            if self._randomize_layout:
+                self.seeds[ii] = self.seeds[ii] + self.num_envs
             w = SimWorld()
             w.reset(int(self.seeds[ii]), arena_mode="trees")
+            # Re-apply the spawn curriculum on the fresh world (parity: scalar runs
+            # jitter / force-mask on every reset, not just the first episode).
+            self._apply_spawn_curriculum(w, int(self.seeds[ii]))
             self.agent_pos[ii] = w.agent_pos
             self.logs[ii] = w.logs
             self.log_alive[ii] = w.log_alive
@@ -396,3 +544,9 @@ class VecGathererSim:
         obs["g_richness_score"][idx] = richness
         for mk, mv in mask.items():
             obs["action_mask"][mk][idx] = mv
+
+        # Re-seed the approach-shaping potential for the just-reset rows to their
+        # FRESH spawn potential (mirrors scalar reset() re-seeding _prev_phi_approach
+        # = _log_potential(world) on the new episode). No-op when approach_shaping is
+        # off; cheap, so unconditional for correctness.
+        self._prev_phi_approach[idx] = self._log_potential_batched(idx)
