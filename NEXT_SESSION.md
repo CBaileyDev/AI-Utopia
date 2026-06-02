@@ -3,6 +3,28 @@
 This supersedes the earlier post-v20 handoff. Read `PROJECT_CONTEXT.md` for the
 big picture; this captures the current frontier.
 
+## ⏩⏩⏩ START HERE (2026-06-01) — BC-anchor + variance-controlled real gate (PR #1)
+
+Read `Research/SESSION_2026-06-01_BC_ANCHOR_AND_VARIANCE_GATE.md`. Built + unit-tested +
+committed on branch `claude/handoff-review-1I8qK`: (1) a **BC-anchor** in
+`scripts/fast_train.py` (`--bc-anchor-coeff`) that re-applies the demonstrator's
+navigate-then-harvest supervision on fresh force-masked spawns each finetune iter;
+(2) a **variance-controlled real-MC gate** in `scripts/transfer_eval_bc.py`
+(`--repeats`/`--pass-threshold` → gate on a success RATE, not n=1 — the P0 blocker
+tool); (3) an RNG-isolation fix making the anchor cleanly A/B-able; (4) a cross-hardware
+LSTM-replay tolerance fix. Full suite 275 green.
+
+**STATUS — anchor VERIFIED on seed 0 (CPU); confirm at full scale next.** A 120-iter
+consolidation with `--gate-every 20` reproduced the RUN D2 erosion in the unanchored
+control (seed_1 navigate 64→0, permanent; harvest survives → final **2/3**) and showed the
+anchored run holds/recovers to **3/3** (64/64/64). So the anchor's benefit is no longer
+hypothetical — it prevents erosion in a regime that demonstrably erodes the control.
+Caveat: one seed, CPU, B=256, a deliberately hot lr (7e-5) chosen to force erosion. **NEXT:**
+(1) run the variance gate on the live server (`transfer_eval_bc.py --repeats 5 --warmup`);
+(2) replay the anchor A/B at full scale (B=512, the RUN D2 seed) across ≥2 seeds before
+promoting — the RNG-isolation fix makes coeff=0 vs >0 a clean A/B. (No live Fabric server /
+GPU in the cloud container this session — all of the above ran in the headless sim.)
+
 ## ⏩⏩ START HERE (2026-05-30 PM) — PEACEFUL-WORLD PIVOT + natural-terrain perception FIXED
 
 User set the scope to a **peaceful survival world** (combat/threat layer descoped — see

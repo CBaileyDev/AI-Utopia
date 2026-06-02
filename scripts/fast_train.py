@@ -56,9 +56,12 @@ from torch import nn
 from aiutopia.env.spaces import build_role_action_space, build_role_observation_space
 from aiutopia.rl_module.actor_head import _slice_offsets
 from aiutopia.rl_module.role_rl_module import AiUtopiaRoleRLModule
+from aiutopia.sim.skills import SKILL_NAVIGATE
 from aiutopia.sim.vec_sim import VecGathererSim
 
-SKILL_SLICE = _slice_offsets()["skill_type"]
+_OFFSETS = _slice_offsets()
+SKILL_SLICE = _OFFSETS["skill_type"]
+SPATIAL_MEAN_START = _OFFSETS["spatial_param"][0]  # Gaussian-mean offset of the 3-d spatial head
 GAMMA = 0.99
 LAMBDA = 0.95
 
@@ -237,6 +240,47 @@ def actions_to_numpy_for_env(act):
     return out
 
 
+# BC-ANCHOR (the reliable-consolidation lever). RUN D showed plain PPO can
+# consolidate a BC-cloned navigate-then-harvest policy on a LUCKY seed, but RUN D2
+# (same recipe, seed 2) eroded it back to 2/3: unmasked HARVEST-one-shot episodes
+# dominate the PPO gradient, and the decisive HARVEST-MASKED spawn states (where
+# NAVIGATE is mandatory) are rare in randomized rollouts, so the cloned navigate
+# decays untouched. The anchor counteracts that erosion at its source: every
+# finetune iter it samples a FRESH batch of force-masked spawn states (exactly the
+# under-represented states) and re-applies the proven NAVIGATE-then-HARVEST
+# supervision as an auxiliary loss. The reference is the scripted demonstrator
+# (sim.bc_demonstrator) -- the GROUND-TRUTH optimum on masked spawns, strictly
+# stronger than anchoring to the imperfect clone, and needing no second frozen
+# module. On a masked spawn the demonstrator emits NAVIGATE for every row, so the
+# anchor reduces to: mask-aware CE(skill -> NAVIGATE) + MSE(spatial-mean -> demo
+# bearing). It cannot fight a legitimate PPO refinement because the one-hop
+# NAVIGATE is optimal on these states. coeff 0 (default) = OFF (plain PPO).
+def bc_anchor_loss(mod, obs_t, skill_mask, exp_skill, exp_spatial, s_h, s_c):
+    """Behavioral-anchor loss on a force-masked spawn batch (all-NAVIGATE demo).
+
+    Returns ``(loss, ce_skill, mse_spatial)``. ``obs_t`` is the tensorized spawn
+    obs; ``s_h``/``s_c`` are the (zero) per-row LSTM start states (spawn == step 0,
+    the decisive zero-state NAVIGATE example the clone was trained on). The skill
+    CE is mask-aware (same masking the rollout + eval use); the spatial MSE is
+    applied only on NAVIGATE rows (all rows here, under force_masked).
+    """
+    out = mod._forward_train({Columns.OBS: obs_t, Columns.STATE_IN: {"h": s_h, "c": s_c}})
+    adi = out[Columns.ACTION_DIST_INPUTS]
+    adi_masked = apply_skill_mask(adi, skill_mask)
+
+    s, e = SKILL_SLICE
+    ce_skill = nn.functional.cross_entropy(adi_masked[:, s:e], exp_skill)
+
+    spatial_mean = adi[:, SPATIAL_MEAN_START : SPATIAL_MEAN_START + 3]
+    is_nav = exp_skill == SKILL_NAVIGATE
+    if bool(is_nav.any()):
+        mse_spatial = nn.functional.mse_loss(spatial_mean[is_nav], exp_spatial[is_nav])
+    else:
+        mse_spatial = adi.sum() * 0.0  # keep the graph connected, zero contribution
+
+    return ce_skill + mse_spatial, ce_skill.detach(), mse_spatial.detach()
+
+
 def seed1_navigate_probe(mod, device) -> str:
     """seed_1 masked-spawn skill-type logits (the supervised leading indicator).
 
@@ -286,6 +330,48 @@ def seed1_navigate_probe(mod, device) -> str:
         )
     finally:
         env.close()
+
+
+def run_gate_check(mod, device, *, tag: str = "") -> float:
+    """Mask-aware greedy eval on the 3 M1 sim scenarios; prints per-seed oak + the
+    seed_1 NAVIGATE-logit probe. Returns the success rate. Restores train mode after.
+
+    EVAL stays CLEAN: the env_config carries NO curriculum keys, so the eval env
+    defaults spawn_jitter/approach_shaping/force_masked_spawn OFF and uses the FIXED
+    scenario seed -- training-time curriculum cannot leak into the gate measurement.
+    """
+    from aiutopia.env.reward import _inventory_from_obs  # noqa: PLC0415
+    from aiutopia.train.scenario_runner import (  # noqa: PLC0415
+        M1_SCENARIOS,
+        aggregate_success_rate,
+        run_scenario,
+    )
+
+    was_training = mod.training
+    mod.eval()
+    try:
+        prefix = f"[gate{(' ' + tag) if tag else ''}] "
+        # Supervised leading indicator: the seed_1 NAVIGATE-logit (the basin-escape
+        # signal precedes the gate flipping) -- watch this for erosion over a run.
+        print(prefix + seed1_navigate_probe(mod, device), flush=True)
+        gate_results = []
+        for sc in M1_SCENARIOS:
+            res = run_scenario(
+                sc,
+                env_config={"active_roles": ["gatherer"], "backend": "sim"},
+                rl_module=mod,
+                device=device,
+            )
+            gate_results.append(res)
+            final = res.get("final_inventory", {}).get("gatherer_0", {})
+            oak = _inventory_from_obs(final).get("oak_log", 0) if final else 0
+            print(f"{prefix}{res['name']}: success={res['success']} oak={oak}", flush=True)
+        sr = aggregate_success_rate(gate_results)
+        print(f"{prefix}M1 GATE success_rate (mask-aware greedy eval): {sr:.3f}", flush=True)
+        return sr
+    finally:
+        if was_training:
+            mod.train()
 
 
 def main() -> None:  # noqa: PLR0912, PLR0915
@@ -350,6 +436,13 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         help="run 3 M1 scenarios (mask-aware greedy) post-train",
     )
     ap.add_argument(
+        "--gate-every",
+        type=int,
+        default=0,
+        help="if >0, also run the gate every N iters DURING training (watch the "
+        "seed_1 navigate trajectory consolidate vs erode). 0 = only post-train.",
+    )
+    ap.add_argument(
         "--save-weights",
         type=str,
         default="",
@@ -391,6 +484,28 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         default=0,
         help="after warm-up, ramp the actor LR linearly from 0 to actor-lr over R "
         "iters so consolidation does not jolt the cloned policy. 0 = no ramp.",
+    )
+    # --- BC-ANCHOR: keep the cloned navigate alive through PPO consolidation ---
+    ap.add_argument(
+        "--bc-anchor-coeff",
+        type=float,
+        default=0.0,
+        help="weight of the BC behavioral-anchor aux loss applied every finetune "
+        "iter on a FRESH force-masked spawn batch (re-injects the proven "
+        "NAVIGATE-then-HARVEST supervision so PPO cannot erode the cloned navigate "
+        "on the rare masked-spawn states; RUN D2 showed plain PPO does). 0 = OFF.",
+    )
+    ap.add_argument(
+        "--bc-anchor-envs",
+        type=int,
+        default=256,
+        help="number of force-masked spawn states sampled for the anchor batch each iter.",
+    )
+    ap.add_argument(
+        "--bc-anchor-epochs",
+        type=int,
+        default=1,
+        help="gradient steps on the anchor batch per finetune iter (>=1 when anchor on).",
     )
     args = ap.parse_args()
 
@@ -455,6 +570,36 @@ def main() -> None:  # noqa: PLR0912, PLR0915
     state_c = init_state["c"].unsqueeze(0).expand(B, hdim).contiguous().to(device)
     zero_h = init_state["h"].to(device)
     zero_c = init_state["c"].to(device)
+
+    # BC-anchor: a dedicated force-masked sim that produces fresh masked-spawn
+    # states each iter (the erosion locus). Built only when the anchor is on so the
+    # default path is byte-unchanged. The demonstrator import is sim-light (numpy).
+    anchor_on = args.bc_anchor_coeff > 0.0
+    if anchor_on:
+        from aiutopia.sim.bc_demonstrator import demonstrate  # noqa: PLC0415
+
+        AB = args.bc_anchor_envs
+        # Dedicated RNG for the anchor's per-iter spawn seeds. CRITICAL for a clean
+        # A/B: the main update loop draws minibatch shuffles from the GLOBAL numpy
+        # RNG (np.random.shuffle), so if the anchor drew its seeds from the same
+        # stream, turning the anchor on would desync every subsequent shuffle and
+        # the coeff=0 (control) vs coeff>0 (treatment) runs would diverge from RNG
+        # drift ALONE -- confounding the anchor's true effect. An isolated Generator
+        # leaves the global stream byte-identical whether the anchor is on or off.
+        anchor_rng = np.random.default_rng(args.seed + 0x5BC0)
+        anchor_sim = VecGathererSim(
+            num_envs=AB,
+            max_episode_ticks=args.max_ep_ticks,
+            force_masked_spawn=True,
+            randomize_layout=True,
+        )
+        anchor_zero_h = init_state["h"].unsqueeze(0).expand(AB, hdim).contiguous().to(device)
+        anchor_zero_c = init_state["c"].unsqueeze(0).expand(AB, hdim).contiguous().to(device)
+        print(
+            f"BC-anchor ON: coeff={args.bc_anchor_coeff:g} envs={AB} "
+            f"epochs={args.bc_anchor_epochs}",
+            flush=True,
+        )
 
     sps = float("nan")
     collect_time = update_time = 0.0
@@ -689,6 +834,42 @@ def main() -> None:  # noqa: PLR0912, PLR0915
                 v_losses.append(float(v_loss.detach()))
 
         update_time = time.perf_counter() - t_update0
+
+        # --- BC-ANCHOR step (finetune/ramp only; the actor is frozen in warm-up) ---
+        # Sample a FRESH force-masked spawn batch and re-apply the proven
+        # NAVIGATE-then-HARVEST supervision so the PPO epochs above cannot erode the
+        # cloned navigate on these under-represented states. Separate opt step (not
+        # folded into the PPO minibatch) so the PPO ratio math stays exact; the
+        # anchor loss only touches actor params (the critic graph is untouched, so
+        # its grads are None and Adam skips them). EVAL stays clean: this never
+        # changes the gate env, only the training gradient on masked spawns.
+        anchor_ce = anchor_mse = float("nan")
+        if anchor_on and not is_warmup:
+            anchor_seeds = anchor_rng.integers(
+                1, 2**31 - 1, size=args.bc_anchor_envs, dtype=np.int64
+            )
+            a_obs = anchor_sim.reset(anchor_seeds)
+            a_obs_t = obs_to_tensors(a_obs, device)
+            a_mask = a_obs_t["action_mask"]["skill_type"]
+            a_demo = demonstrate(a_obs)
+            exp_skill = torch.as_tensor(np.asarray(a_demo["skill_type"]), device=device).long()
+            exp_spatial = torch.as_tensor(
+                np.asarray(a_demo["spatial_param"]), device=device, dtype=torch.float32
+            )
+            ces, mses = [], []
+            for _ae in range(max(1, args.bc_anchor_epochs)):
+                a_loss, a_ce, a_mse = bc_anchor_loss(
+                    mod, a_obs_t, a_mask, exp_skill, exp_spatial, anchor_zero_h, anchor_zero_c
+                )
+                opt.zero_grad()
+                (args.bc_anchor_coeff * a_loss).backward()
+                nn.utils.clip_grad_norm_(mod.parameters(), args.grad_clip)
+                opt.step()
+                ces.append(float(a_ce))
+                mses.append(float(a_mse))
+            anchor_ce = float(np.mean(ces))
+            anchor_mse = float(np.mean(mses))
+
         iter_time = time.perf_counter() - t_iter0
 
         # Full-episode return metrics (correct, from sim.last_episode_return).
@@ -730,9 +911,15 @@ def main() -> None:  # noqa: PLR0912, PLR0915
             f"v_loss {vloss_m:8.3f} | "
             f"ent {ent_m:.3f} KL {kl_m:.4f} clipfrac {cf_m:.3f} kl_coeff {kl_coeff_logged:.4f} | "
             f"first_mb[KL {first_mb_kl:.5f} clipfrac {first_mb_clipfrac:.4f}] | "
+            f"anchor[ce {anchor_ce:.3f} mse {anchor_mse:.4f}] | "
             f"seq_cross {cross_frac:.2f}",
             flush=True,
         )
+
+        # Periodic gate during training: watch the seed_1 navigate consolidate or
+        # erode. Skipped on the final iter (the post-train gate covers it).
+        if args.gate_every > 0 and it % args.gate_every == 0 and it < args.iters - 1:
+            run_gate_check(mod, device, tag=f"it{it}")
 
     warm = sps_hist[1:] if len(sps_hist) > 1 else sps_hist  # drop iter 0 (CUDA init)
     med_sps = float(np.median(warm)) if warm else float("nan")
@@ -753,40 +940,7 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         print(f"saved weights -> {args.save_weights}", flush=True)
 
     if args.gate_check:
-        from aiutopia.env.reward import _inventory_from_obs  # noqa: PLC0415
-        from aiutopia.train.scenario_runner import (  # noqa: PLC0415
-            M1_SCENARIOS,
-            aggregate_success_rate,
-            run_scenario,
-        )
-
-        mod.eval()
-        # Supervised leading indicator: print the seed_1 NAVIGATE-logit line every
-        # run (the basin-escape signal precedes the gate flipping).
-        print(seed1_navigate_probe(mod, device), flush=True)
-        gate_results = []
-        for sc in M1_SCENARIOS:
-            res = run_scenario(
-                sc,
-                # EVAL stays CLEAN: this env_config carries NO curriculum keys, so the
-                # eval env defaults spawn_jitter/approach_shaping/force_masked_spawn
-                # OFF and uses the FIXED scenario seed. Training-time curriculum cannot
-                # leak into the gate measurement.
-                env_config={"active_roles": ["gatherer"], "backend": "sim"},
-                rl_module=mod,
-                device=device,
-            )
-            gate_results.append(res)
-            # Per-seed oak count (not just success): the SAME _inventory_from_obs the
-            # gate predicate uses, over the final obs run_scenario returns.
-            final = res.get("final_inventory", {}).get("gatherer_0", {})
-            oak = _inventory_from_obs(final).get("oak_log", 0) if final else 0
-            print(
-                f"  gate {res['name']}: success={res['success']} oak={oak}",
-                flush=True,
-            )
-        sr = aggregate_success_rate(gate_results)
-        print(f"M1 GATE success_rate (mask-aware greedy eval): {sr:.3f}", flush=True)
+        run_gate_check(mod, device, tag="final")
 
 
 if __name__ == "__main__":
