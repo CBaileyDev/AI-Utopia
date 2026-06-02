@@ -105,6 +105,23 @@ def _role_of(agent_id: str) -> str:
     return agent_id.split("_", 1)[0]
 
 
+# Indexable, immutable health fallback so the step() death-check never allocates a
+# fresh ``np.array([20.0])`` on the hot dispatch path just to read ``[0]``.
+_HEALTH_FALLBACK = (20.0,)
+
+
+def _as_int_scalar(x: Any, default: int = -1) -> int:
+    """Coerce a scalar action field to a python int WITHOUT allocating a numpy
+    array. Handles python ints/floats, numpy scalars, and size-1 numpy arrays
+    (all expose ``.item()``); anything malformed falls back to ``default``. This
+    replaces the per-step ``int(np.asarray(x).item())`` which allocated an array
+    for every dispatch even when ``x`` was already a scalar."""
+    try:
+        return int(x.item() if hasattr(x, "item") else x)
+    except (TypeError, ValueError):
+        return default
+
+
 def _decode_obs(
     raw: dict, role: str, stage: int, action_mask: dict[str, np.ndarray], goal_embed: np.ndarray
 ) -> dict[str, Any]:
@@ -365,15 +382,15 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
             # Java executor doesn't burn 6000 ticks (20s wall at TPS=300) on
             # a single failed NAVIGATE during random-policy sampling.
             # Mutate a shallow copy so we don't poison the policy's dict.
-            try:
-                skill_type = int(np.asarray(act.get("skill_type", -1)).item())
-            except Exception:
-                skill_type = -1
+            skill_type = _as_int_scalar(act.get("skill_type", -1))
             if "timeout_ticks" not in act and skill_type in self.skill_timeout_ticks:
                 act = {**act, "timeout_ticks": int(self.skill_timeout_ticks[skill_type])}
             self.bridge.dispatch_skill(player_name, act, invocation_id)
+            # The comm_target_mask check already short-circuits on the (rare)
+            # should_broadcast==1 path, so the np.asarray here only runs on an actual
+            # broadcast — no per-step alloc to optimize away. Left as-is.
             if (
-                int(act.get("should_broadcast", 0)) == 1
+                _as_int_scalar(act.get("should_broadcast", 0), 0) == 1
                 and np.asarray(act.get("comm_target_mask", [0, 0, 0, 0])).any()
             ):
                 comm_msgs.append({"sender": player_name, "action": act})
@@ -407,8 +424,8 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
             completion = completions_by_agent.get(agent, {})
             n_clipped = bin(int(completion.get("clippedAxesBitset", 0))).count("1")
             # health is now a numpy shape-(1,) array after _normalize_raw.
-            prev_h = float(self._prev_obs.get(agent, {}).get("health", np.array([20.0]))[0])
-            curr_h = float(new_obs.get(agent, {}).get("health", np.array([20.0]))[0])
+            prev_h = float(self._prev_obs.get(agent, {}).get("health", _HEALTH_FALLBACK)[0])
+            curr_h = float(new_obs.get(agent, {}).get("health", _HEALTH_FALLBACK)[0])
             died_this_tick = curr_h <= 0 and prev_h > 0
             # Run exploit detector
             exploit_penalties = self.exploit_detectors[agent].step(
@@ -549,6 +566,15 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
         observationsFarmer), uses them. Otherwise falls back to observations_all() (Gatherer-only).
         """
         out: dict[str, dict] = {}
+        # BATCHED-OBS INVARIANT (spec §4.6 / bridge.py): observationsAll() returns
+        # EVERY agent in ONE Py4J round-trip, so it must be called AT MOST ONCE per
+        # tick. The fallback below previously lived inside the per-agent loop, so on
+        # gatherer-only Java (the current build → role-specific methods absent) it
+        # fired observations_all() once PER AGENT — N redundant full-batch
+        # round-trips/tick, the exact pattern the spec forbids (caps throughput at
+        # ~300 agent-steps/s). Harmless at M1 (single gatherer) but an N× regression
+        # the moment M2 adds roles. Fetch the batch lazily and cache it for the loop.
+        raw_all_cached: dict[str, dict] | None = None
         for agent in self.agents:
             role = _role_of(agent)
             player_name = self.agent_id_to_player_name.get(agent, agent)
@@ -558,17 +584,21 @@ class AiUtopiaPettingZooEnv(ParallelEnv):
             try:
                 if role == "gatherer" and hasattr(self.bridge.entry_point, "observationsGatherer"):
                     raw = self.bridge.entry_point.observationsGatherer(player_name) or {}
-                elif role == "explorer" and hasattr(self.bridge.entry_point, "observationsExplorer"):
+                elif role == "explorer" and hasattr(
+                    self.bridge.entry_point, "observationsExplorer"
+                ):
                     raw = self.bridge.entry_point.observationsExplorer(player_name) or {}
                 elif role == "farmer" and hasattr(self.bridge.entry_point, "observationsFarmer"):
                     raw = self.bridge.entry_point.observationsFarmer(player_name) or {}
             except Exception:
                 pass  # Fallback to batch below
 
-            # Fallback: batch observations_all (current Java, Gatherer-only)
+            # Fallback: batch observations_all (current Java, Gatherer-only). Fetched
+            # once and reused across agents so the per-tick call count stays at 1.
             if not raw:
-                raw_all = self.bridge.observations_all()
-                raw = raw_all.get(player_name, {})
+                if raw_all_cached is None:
+                    raw_all_cached = self.bridge.observations_all()
+                raw = raw_all_cached.get(player_name, {})
 
             raw = _normalize_raw(raw)
             mask = compute_gatherer_action_mask(raw) if role == "gatherer" else {}
