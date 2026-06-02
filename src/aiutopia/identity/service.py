@@ -6,6 +6,7 @@ path. Death/spawn methods here are unit-tested with dry-runs only —
 the Carpet `/player kill` and `/player spawn` calls are wired in CLI
 T30 once the bridge is up.
 """
+
 from __future__ import annotations
 
 import json
@@ -17,15 +18,17 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from aiutopia.common.ids import (
-    is_ulid, memory_id_for, new_agent_uuid, skill_library_id_for,
+    is_ulid,
+    memory_id_for,
+    new_agent_uuid,
+    skill_library_id_for,
 )
 from aiutopia.identity.migrations_runner import apply_migrations
 from aiutopia.identity.models import Agent, Role, RoleId
 
-
 # Subset of migrations belonging to identity.db (vs planner_state.db).
 _IDENTITY_MIGRATIONS = ("identity_",)
-_PLANNER_MIGRATIONS  = ("planner_state_",)
+_PLANNER_MIGRATIONS = ("planner_state_",)
 
 
 def _migrations_for(prefixes: tuple[str, ...], dir_path: Path) -> Path:
@@ -79,9 +82,7 @@ class IdentityService:
     # ───── reads ─────
     def get_role(self, role_id: RoleId) -> Role:
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT * FROM roles WHERE role_id = ?", (role_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM roles WHERE role_id = ?", (role_id,)).fetchone()
         if row is None:
             raise KeyError(f"no such role: {role_id!r}")
         return Role(
@@ -102,6 +103,11 @@ class IdentityService:
             ).fetchone()
         if row is None:
             raise KeyError(f"no such agent: {agent_uuid!r}")
+        return self._row_to_agent(row)
+
+    @staticmethod
+    def _row_to_agent(row: sqlite3.Row) -> Agent:
+        """Build an Agent from an `agents` row (shared by get_agent / list_living_agents)."""
         return Agent(
             agent_uuid=row["agent_uuid"],
             role_id=row["role_id"],
@@ -116,19 +122,29 @@ class IdentityService:
         )
 
     def list_living_agents(self) -> list[Agent]:
+        # Single query: SELECT the full rows directly. The previous form selected
+        # only agent_uuid and then called get_agent() per row — N+1 connections +
+        # SELECTs (each get_agent opens/commits/closes its own connection), an
+        # avoidable O(n) round-trip burst at startup/spawn (api/app.py calls this
+        # on every /agents request and spawn). One query + a local map is exact.
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT agent_uuid FROM agents WHERE status = 'alive' ORDER BY born_at"
+                "SELECT * FROM agents WHERE status = 'alive' ORDER BY born_at"
             ).fetchall()
-        return [self.get_agent(r["agent_uuid"]) for r in rows]
+        return [self._row_to_agent(r) for r in rows]
 
     # ───── writes ─────
-    def spawn_agent(self, role_id: RoleId, agent_name: str, born_at: int,
-                    spawn_position_json: str | None = None,
-                    skin: str | None = None) -> Agent:
+    def spawn_agent(
+        self,
+        role_id: RoleId,
+        agent_name: str,
+        born_at: int,
+        spawn_position_json: str | None = None,
+        skin: str | None = None,
+    ) -> Agent:
         agent_uuid = new_agent_uuid()
-        skill_lib  = skill_library_id_for(agent_uuid)
-        mem_id     = memory_id_for(agent_uuid)
+        skill_lib = skill_library_id_for(agent_uuid)
+        mem_id = memory_id_for(agent_uuid)
         with self._conn() as conn:
             conn.execute(
                 """INSERT INTO agents
@@ -136,8 +152,16 @@ class IdentityService:
                         memory_id, status, born_at, died_at,
                         spawn_position_json, current_skin)
                    VALUES (?, ?, ?, ?, ?, 'alive', ?, NULL, ?, ?)""",
-                (agent_uuid, role_id, agent_name, skill_lib, mem_id,
-                 born_at, spawn_position_json, skin),
+                (
+                    agent_uuid,
+                    role_id,
+                    agent_name,
+                    skill_lib,
+                    mem_id,
+                    born_at,
+                    spawn_position_json,
+                    skin,
+                ),
             )
             conn.execute(
                 """INSERT INTO agent_lives
@@ -147,14 +171,12 @@ class IdentityService:
             )
         return self.get_agent(agent_uuid)
 
-    def record_death(self, agent_uuid: str, died_at: int,
-                     cause_of_death: str) -> None:
+    def record_death(self, agent_uuid: str, died_at: int, cause_of_death: str) -> None:
         if not is_ulid(agent_uuid):
             raise ValueError(f"not a ULID: {agent_uuid!r}")
         with self._conn() as conn:
             conn.execute(
-                "UPDATE agents SET status='dead', died_at=? "
-                "WHERE agent_uuid=? AND status='alive'",
+                "UPDATE agents SET status='dead', died_at=? WHERE agent_uuid=? AND status='alive'",
                 (died_at, agent_uuid),
             )
             conn.execute(
@@ -163,16 +185,19 @@ class IdentityService:
                 (died_at, cause_of_death, agent_uuid),
             )
 
-    def record_funeral(self, deceased_agent_uuid: str,
-                       witness_uuids: list[str],
-                       event_summary: str, written_at: int) -> int:
+    def record_funeral(
+        self,
+        deceased_agent_uuid: str,
+        witness_uuids: list[str],
+        event_summary: str,
+        written_at: int,
+    ) -> int:
         with self._conn() as conn:
             cur = conn.execute(
                 """INSERT INTO funerals
                        (deceased_agent_uuid, witness_agent_uuids_json,
                         event_summary, written_to_memory_at)
                    VALUES (?, ?, ?, ?)""",
-                (deceased_agent_uuid, json.dumps(witness_uuids),
-                 event_summary, written_at),
+                (deceased_agent_uuid, json.dumps(witness_uuids), event_summary, written_at),
             )
             return cur.lastrowid or -1
